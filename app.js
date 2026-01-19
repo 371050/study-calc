@@ -1,241 +1,406 @@
 
-let cdb;
-let currentSeriesId = null;
-let selectedProblemId = null;
-let selectedAttemptId = null;
+let db;
+let currentSubjectId = null;
+let selectedUnitId = null;
+let selectedReviewId = null;
+
+const UNIT_RE = /^\d+\-\d+$/;
 
 function $(id){ return document.getElementById(id); }
 function escapeHtml(s){ return String(s).replace(/[&<>\"']/g, c => ({'&':'&','<':'<','>':'>','"':'"','\'':'\''}[c])); }
 function toast(msg){ $("log").textContent = msg; setTimeout(()=>{$("log").textContent="";}, 3000); }
 
-/* 入力パース："1-1 問題3" / "1-1 総合1" / "第2回 答練" */
-function parseQuick(text) {
-  const parts = text.trim().split(/[、\s]+/).map(s=>s.trim()).filter(Boolean);
+// ローカル日付
+function toYmdLocal(d = new Date()) {
+  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+
+function parseEntries(text) {
+  // 「,」「、」「空白」「改行」で分割。各トークンの中で "code:title" 形式に対応
+  const parts = text.trim().split(/[,\u3001\s]+/).map(s=>s.trim()).filter(Boolean);
   const out = [];
+  const seen = new Set();
   for (const p of parts) {
-    const m = p.match(/^(?<series>(?:\d+\-\d+|第\d+回))\s*(?<kind>問題|総合|答練)\s*(?<num>\d+)?$/);
-    if (!m) { out.push({ error: p }); continue; }
-    const { series, kind } = m.groups;
-    const number = (kind === "答練") ? null : (m.groups.num ? Number(m.groups.num) : null);
-    if (kind !== "答練" && (number===null || !Number.isInteger(number) || number<=0)) { out.push({ error: p }); continue; }
-    out.push({ series, kind, number });
+    let code = p, title = "";
+    const idx = p.indexOf(":");
+    const idxJa = p.indexOf("：");
+    const use = (idxJa >= 0 && (idx < 0 || idxJa < idx)) ? idxJa : idx;
+    if (use >= 0) {
+      code = p.slice(0, use).trim();
+      title = p.slice(use+1).trim();
+    }
+    if (!seen.has(code)) {
+      out.push({ code, title: title || null });
+      seen.add(code);
+    }
   }
   return out;
 }
 
-async function refreshSeries(selectId=null) {
-  const list = await listSeries(cdb);
-  const sel = $("seriesSelect"); sel.innerHTML = "";
-  list.forEach(s => { const opt = document.createElement("option"); opt.value = s.id; opt.textContent = s.name; sel.appendChild(opt); });
-  if (list.length) { currentSeriesId = selectId ?? currentSeriesId ?? list[0].id; sel.value = currentSeriesId; } else { currentSeriesId = null; }
+async function refreshSubjects(selectId=null) {
+  const subs = await listSubjects(db);
+  const sel = $("subjectSelect");
+  sel.innerHTML = "";
+  subs.forEach(s => {
+    const opt = document.createElement("option");
+    opt.value = s.id;
+    opt.textContent = s.name;
+    sel.appendChild(opt);
+  });
+  if (subs.length) {
+    currentSubjectId = selectId ?? currentSubjectId ?? subs[0].id;
+    sel.value = currentSubjectId;
+  } else {
+    currentSubjectId = null;
+  }
   await refreshAll();
 }
-async function refreshAll() { await refreshDue(); await refreshUpcoming(); await refreshMatrix(); await refreshAttempts(); }
+
+async function refreshAll() {
+  if (!currentSubjectId) return;
+  await refreshDue();
+  await refreshUpcoming();
+  await refreshUnits();
+  await refreshReviews();
+}
 
 async function refreshDue() {
-  const tbody = $("dueTable").querySelector("tbody"); tbody.innerHTML = "";
-  const seriesList = await listSeries(cdb); const sMap = new Map(seriesList.map(s => [s.id, s]));
-  const problems = await getAll2(cdb, "problems");
+  const tbody = $("dueTable").querySelector("tbody");
+  tbody.innerHTML = "";
+  const subs = await listSubjects(db);
+  const subMap = new Map(subs.map(s => [s.id, s]));
+  const units = await getAll(db, "units");
+
   const today = new Date(); today.setHours(0,0,0,0);
   const rows = [];
-  for (const p of problems) {
-    const st = await computeProblemStatus(cdb, p);
-    if (st.hide || !st.nextDue) continue;
-    const due = new Date(st.nextDue); due.setHours(0,0,0,0);
+
+  for (const u of units) {
+    const status = await computeUnitStatus(db, u);
+    if (status.lastNo === 0) continue;
+    const due = new Date(status.nextDue); due.setHours(0,0,0,0);
     if (due <= today) {
-      const overdue = Math.max(0, Math.round((today - due) / (1000*60*60*24)));
-      rows.push({ seriesOrder: sMap.get(p.seriesId)?.sortOrder ?? 999, series: sMap.get(p.seriesId)?.name ?? "", label: problemLabel(p), lastNo: st.lastNo, lastDate: st.lastDate, nextDue: st.nextDue, overdue });
+      const overdue = Math.max(0, Math.round((today - due)/(1000*60*60*24)));
+      rows.push({
+        subjectOrder: subMap.get(u.subjectId)?.sortOrder ?? 999,
+        subject: subMap.get(u.subjectId)?.name ?? "",
+        unitCode: u.unitCode,
+        title: u.title ?? "",
+        lastNo: status.lastNo,
+        lastDate: status.lastDate,
+        nextDue: status.nextDue,
+        overdue
+      });
     }
   }
-  rows.sort((a,b) => a.seriesOrder - b.seriesOrder || b.overdue - a.overdue || a.nextDue.localeCompare(b.nextDue) || a.label.localeCompare(b.label, "ja"));
+  rows.sort((a,b) =>
+    (a.subjectOrder - b.subjectOrder) ||
+    (b.overdue - a.overdue) ||
+    a.nextDue.localeCompare(b.nextDue) ||
+    a.unitCode.localeCompare(b.unitCode, "ja")
+  );
+
   for (const r of rows) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${escapeHtml(r.series)}</td><td>${escapeHtml(r.label)}</td><td>${r.lastNo}</td><td>${r.lastDate}</td><td>${r.nextDue}</td><td>${r.overdue}</td>`;
+    tr.innerHTML = `
+      <td>${escapeHtml(r.subject)}</td>
+      <td>${escapeHtml(r.unitCode)}</td>
+      <td>${escapeHtml(r.title)}</td>
+      <td>${r.lastNo}</td>
+      <td>${r.lastDate}</td>
+      <td>${r.nextDue}</td>
+      <td>${r.overdue}</td>
+    `;
     tbody.appendChild(tr);
   }
 }
+
 async function refreshUpcoming() {
-  const tbody = $("upcomingTable").querySelector("tbody"); tbody.innerHTML = "";
-  const seriesList = await listSeries(cdb); const sMap = new Map(seriesList.map(s => [s.id, s]));
-  const problems = await getAll2(cdb, "problems");
+  const tbody = $("upcomingTable").querySelector("tbody");
+  tbody.innerHTML = "";
+  const subs = await listSubjects(db);
+  const subMap = new Map(subs.map(s => [s.id, s]));
+  const units = await getAll(db, "units");
+
   const today = new Date(); today.setHours(0,0,0,0);
   const end = new Date(today); end.setDate(end.getDate() + 7);
+
   const rows = [];
-  for (const p of problems) {
-    const st = await computeProblemStatus(cdb, p);
-    if (st.hide || !st.nextDue) continue;
-    const due = new Date(st.nextDue); due.setHours(0,0,0,0);
-    if (today <= due && due <= end) rows.push({ due: st.nextDue, seriesOrder: sMap.get(p.seriesId)?.sortOrder ?? 999, series: sMap.get(p.seriesId)?.name ?? "", label: problemLabel(p), lastNo: st.lastNo, lastDate: st.lastDate });
+  for (const u of units) {
+    const status = await computeUnitStatus(db, u);
+    if (status.lastNo === 0) continue;
+    const due = new Date(status.nextDue); due.setHours(0,0,0,0);
+    if (today <= due && due <= end) {
+      rows.push({
+        due: status.nextDue,
+        subjectOrder: subMap.get(u.subjectId)?.sortOrder ?? 999,
+        subject: subMap.get(u.subjectId)?.name ?? "",
+        unitCode: u.unitCode,
+        title: u.title ?? "",
+        lastNo: status.lastNo,
+        lastDate: status.lastDate
+      });
+    }
   }
-  rows.sort((a,b) => a.due.localeCompare(b.due) || a.seriesOrder - b.seriesOrder || a.label.localeCompare(b.label, "ja"));
+  rows.sort((a,b) =>
+    a.due.localeCompare(b.due) ||
+    (a.subjectOrder - b.subjectOrder) ||
+    a.unitCode.localeCompare(b.unitCode, "ja")
+  );
+
   let lastDue = null;
   for (const r of rows) {
-    if (r.due !== lastDue) { const g = document.createElement("tr"); g.className = "group"; g.innerHTML = `<td>${r.due}</td><td colspan="4"></td>`; tbody.appendChild(g); lastDue = r.due; }
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td></td><td>${escapeHtml(r.series)}</td><td>${escapeHtml(r.label)}</td><td>${r.lastNo}</td><td>${r.lastDate}</td>`;
-    tbody.appendChild(tr);
-  }
-}
-function problemLabel(p) { return (p.kind === "答練") ? "答練" : `${p.kind}${p.number}`; }
-
-async function refreshMatrix() {
-  const thead = $("matrixHeaderRow"); const tbody = $("matrixTable").querySelector("tbody");
-  thead.innerHTML = "<th>問題</th>"; tbody.innerHTML = ""; if (!currentSeriesId) return;
-  const problems = await listProblemsBySeries(cdb, Number(currentSeriesId));
-  let maxNo = 0; const attemptsMap = new Map();
-  for (const p of problems) {
-    const atts = await listAttemptsByProblem(cdb, p.id);
-    attemptsMap.set(p.id, atts);
-    if (atts.length) maxNo = Math.max(maxNo, Math.max(...atts.map(a=>a.attemptNo)));
-  }
-  for (let i=1; i<=Math.max(maxNo, 5); i++) { const th = document.createElement("th"); th.textContent = `${i}回目`; thead.appendChild(th); }
-  for (const p of problems) {
-    const tr = document.createElement("tr"); tr.dataset.problemId = p.id;
-    tr.innerHTML = `<td class="nowrap">${escapeHtml(problemLabel(p))}</td>`;
-    const atts = attemptsMap.get(p.id) ?? []; const byNo = new Map(atts.map(a => [a.attemptNo, a])); const cols = Math.max(maxNo, 5);
-    for (let i=1; i<=cols; i++) {
-      const a = byNo.get(i); const td = document.createElement("td"); td.className = "center";
-      if (a) {
-        const pill = document.createElement("div");
-        pill.className = "pill " + (a.att==="○" ? "-ok" : a.att==="△" ? "-mid" : "-ng");
-        pill.textContent = a.att;
-        pill.title = `${a.doneDate} / ${a.minutes??"-"}分 / ${a.score??"-"}点`;
-        pill.onclick = () => { selectedProblemId = p.id; selectedAttemptId = a.id; fillEditForm(a); highlightSelection(); refreshAttempts(); };
-        td.appendChild(pill);
-      } else { td.textContent = ""; }
-      tr.appendChild(td);
+    if (r.due !== lastDue) {
+      const g = document.createElement("tr");
+      g.className = "group";
+      g.innerHTML = `<td>${r.due}</td><td colspan="5"></td>`;
+      tbody.appendChild(g);
+      lastDue = r.due;
     }
-    tr.onclick = () => { selectedProblemId = p.id; selectedAttemptId = null; highlightSelection(); refreshAttempts(); fillProblemForm(p); };
-    tbody.appendChild(tr);
-  }
-  highlightSelection();
-}
-function fillEditForm(a) {
-  $("editNo").value = a.attemptNo; $("editDate").value = a.doneDate;
-  $("editTime").value = a.minutes ?? ""; $("editScore").value = a.score ?? ""; $("editAtt").value = a.att;
-}
-function fillProblemForm(p) {
-  const currentSeriesName = $("seriesSelect").selectedOptions[0]?.textContent ?? "";
-  $("formSeries").value = currentSeriesName; $("formKind").value = p.kind; $("formNumber").value = (p.kind === "答練") ? "" : (p.number ?? "");
-}
-function highlightSelection() {
-  const rows = $("matrixTable").querySelectorAll("tbody tr");
-  rows.forEach(r => r.style.outline = (Number(r.dataset.problemId) === selectedProblemId) ? "2px solid #7aa2ff" : "none");
-}
-
-async function refreshAttempts() {
-  const tbody = $("attemptsTable").querySelector("tbody"); tbody.innerHTML = "";
-  selectedAttemptId = null; $("editNo").value = ""; $("editDate").value = ""; $("editTime").value = ""; $("editScore").value = ""; $("editAtt").value = "○";
-  if (!selectedProblemId) return;
-  const list = await listAttemptsByProblem(cdb, selectedProblemId);
-  for (const a of list) {
-    const tr = document.createElement("tr"); tr.dataset.attemptId = a.id;
-    tr.innerHTML = `<td>${a.id}</td><td>${a.attemptNo}</td><td>${a.doneDate}</td><td>${a.minutes??""}</td><td>${a.score??""}</td><td>${a.att}</td>`;
-    tr.onclick = () => { selectedAttemptId = a.id; fillEditForm(a); highlightAttemptSel(); };
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td></td>
+      <td>${escapeHtml(r.subject)}</td>
+      <td>${escapeHtml(r.unitCode)}</td>
+      <td>${escapeHtml(r.title)}</td>
+      <td>${r.lastNo}</td>
+      <td>${r.lastDate}</td>
+    `;
     tbody.appendChild(tr);
   }
 }
-function highlightAttemptSel() {
-  const rows = $("attemptsTable").querySelectorAll("tbody tr");
-  rows.forEach(r => r.style.outline = (Number(r.dataset.attemptId)===selectedAttemptId) ? "2px solid #7aa2ff" : "none");
+
+async function refreshUnits() {
+  const tbody = $("unitsTable").querySelector("tbody");
+  tbody.innerHTML = "";
+  const units = await listUnitsBySubject(db, Number(currentSubjectId));
+  for (const u of units) {
+    const status = await computeUnitStatus(db, u);
+    const tr = document.createElement("tr");
+    tr.dataset.unitId = u.id;
+    tr.innerHTML = `
+      <td>${escapeHtml(u.unitCode)}</td>
+      <td>${escapeHtml(u.title ?? "")}</td>
+      <td>${status.lastNo}</td>
+      <td>${status.lastDate}</td>
+      <td>${status.nextDue}</td>
+    `;
+    tr.onclick = async () => {
+      selectedUnitId = u.id;
+      $("unitCode").value = u.unitCode;
+      $("unitTitle").value = u.title ?? "";
+      $("unitDate").value = toYmdLocal(new Date());
+      $("unitReviewNo").value = "";
+      selectedReviewId = null;
+      await refreshReviews();
+      highlightSelectedUnit();
+    };
+    tbody.appendChild(tr);
+  }
+  highlightSelectedUnit();
+}
+function highlightSelectedUnit() {
+  const rows = $("unitsTable").querySelectorAll("tbody tr");
+  rows.forEach(r => r.style.outline = (Number(r.dataset.unitId)===selectedUnitId) ? "2px solid #7aa2ff" : "none");
 }
 
-async function initCalc() {
-  cdb = await openCalcDb();
-  const today = toYmdLocal(new Date());
-  $("quickDate").value = today; $("formDate").value = today;
+async function refreshReviews() {
+  const tbody = $("reviewsTable").querySelector("tbody");
+  tbody.innerHTML = "";
+  selectedReviewId = null;
+  $("editReviewNo").value = "";
+  $("editReviewDate").value = "";
+  if (!selectedUnitId) return;
+  const revs = await listReviewsByUnit(db, selectedUnitId);
+  for (const r of revs) {
+    const tr = document.createElement("tr");
+    tr.dataset.reviewId = r.id;
+    tr.innerHTML = `<td>${r.id}</td><td>${r.reviewNo}</td><td>${r.doneDate}</td>`;
+    tr.onclick = () => {
+      selectedReviewId = r.id;
+      $("editReviewNo").value = r.reviewNo;
+      $("editReviewDate").value = r.doneDate;
+      highlightSelectedReview();
+    };
+    tbody.appendChild(tr);
+  }
+}
+function highlightSelectedReview() {
+  const rows = $("reviewsTable").querySelectorAll("tbody tr");
+  rows.forEach(r => r.style.outline = (Number(r.dataset.reviewId)===selectedReviewId) ? "2px solid #7aa2ff" : "none");
+}
 
-  if ("serviceWorker" in navigator) { navigator.serviceWorker.register("./sw.js").catch(()=>{}); }
-  await refreshSeries();
+async function init() {
+  db = await openDb();
+  await seedDefaultSubjects(db); // ★ 科目の既定セットを初回投入
 
-  $("seriesSelect").onchange = async (e) => { currentSeriesId = Number(e.target.value); selectedProblemId = null; selectedAttemptId = null; await refreshAll(); };
-  $("addSeriesBtn").onclick = async () => { const name = prompt("追加するシリーズ名（例：1-1 / 第2回）を入力"); if (!name) return; try { await addSeries(cdb, name); await refreshSeries(); } catch(e){ alert(e.message); } };
-  $("seriesUpBtn").onclick = async () => { if (!currentSeriesId) return; await moveSeries(cdb, Number(currentSeriesId), -1); await refreshSeries(Number(currentSeriesId)); };
-  $("seriesDownBtn").onclick = async () => { if (!currentSeriesId) return; await moveSeries(cdb, Number(currentSeriesId), +1); await refreshSeries(Number(currentSeriesId)); };
+  // 日付初期値
+  const todayStr = toYmdLocal(new Date());
+  $("unitDate").value = todayStr;
 
-  $("recordQuickBtn").onclick = async () => {
-    const entries = parseQuick($("quickInput").value);
-    const doneDate = $("quickDate").value;
-    const minutes = $("quickTime").value ? Number($("quickTime").value) : null;
-    const score = $("quickScore").value ? Number($("quickScore").value) : null;
-    const att = $("quickAtt").value;
-    if (!doneDate) return alert("学習日を入れてください");
+  // PWA SW register
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch(()=>{});
+  }
+
+  await refreshSubjects();
+
+  // === イベント ===
+  $("subjectSelect").onchange = async (e) => {
+    currentSubjectId = Number(e.target.value);
+    selectedUnitId = null;
+    selectedReviewId = null;
+    await refreshAll();
+  };
+
+  $("addSubjectBtn").onclick = async () => {
+    const name = prompt("追加する教科名を入力（例：相続税法）");
+    if (!name) return;
+    try {
+      await addSubject(db, name);
+      await refreshSubjects();
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+
+  $("subjectUpBtn").onclick = async () => {
+    if (!currentSubjectId) return;
+    await moveSubject(db, Number(currentSubjectId), -1);
+    await refreshSubjects(Number(currentSubjectId));
+  };
+  $("subjectDownBtn").onclick = async () => {
+    if (!currentSubjectId) return;
+    await moveSubject(db, Number(currentSubjectId), +1);
+    await refreshSubjects(Number(currentSubjectId));
+  };
+
+  $("recordTodayBtn").onclick = async () => {
+    const entries = parseEntries($("todayInput").value);
+    if (!entries.length) return toast("入力が空です");
+    const overwrite = $("overwriteTitle").checked;
 
     for (const it of entries) {
-      if (it.error) { toast(`形式エラー: ${it.error}`); continue; }
-      const sList = await listSeries(cdb); let s = sList.find(x => x.name === it.series);
-      if (!s) { await addSeries(cdb, it.series); s = (await listSeries(cdb)).find(x => x.name === it.series); }
-      const problemId = await getOrCreateProblem(cdb, s.id, it.kind, it.number);
-      const nextNo = await getNextAttemptNo(cdb, problemId);
-      try { await insertAttempt(cdb, problemId, nextNo, doneDate, minutes, score, att); } catch (e) { /* 同日 or 同回数重複 */ }
+      if (!UNIT_RE.test(it.code)) {
+        toast(`形式エラー: ${it.code}`);
+        continue;
+      }
+      const unitId = await getOrCreateUnit(db, Number(currentSubjectId), it.code);
+
+      if (it.title) {
+        const units = await listUnitsBySubject(db, Number(currentSubjectId));
+        const u = units.find(x => x.id === unitId);
+        if (u && (!u.title || overwrite)) {
+          await updateUnitTitle(db, unitId, it.title);
+        }
+      }
+
+      const doneDate = toYmdLocal(new Date());
+      try {
+        const nextNo = await getNextReviewNo(db, unitId);
+        await insertReview(db, unitId, nextNo, doneDate);
+      } catch (e) {
+        // 同日重複など（unique index by_unit_date）
+      }
     }
-    $("quickInput").value = ""; $("quickTime").value = ""; $("quickScore").value = "";
-    toast("記録しました"); await refreshAll();
+    $("todayInput").value = "";
+    toast("記録しました");
+    await refreshAll();
   };
 
   $("addOrRecordBtn").onclick = async () => {
-    const seriesName = $("formSeries").value.trim();
-    const kind = $("formKind").value;
-    const number = $("formNumber").value ? Number($("formNumber").value) : null;
-    const doneDate = $("formDate").value;
-    const minutes = $("formTime").value ? Number($("formTime").value) : null;
-    const score = $("formScore").value ? Number($("formScore").value) : null;
-    const att = $("formAtt").value;
-    if (!seriesName) return alert("シリーズを入れてください");
+    if (!currentSubjectId) return;
+    const code = $("unitCode").value.trim();
+    const title = $("unitTitle").value.trim();
+    const doneDate = $("unitDate").value;
+    const overwrite = $("overwriteTitle2").checked;
+    const rnoInput = $("unitReviewNo").value;
+
+    if (!UNIT_RE.test(code)) return alert("単元コードは 1-1 形式（数字-数字）です");
     if (!doneDate) return alert("学習日を入れてください");
-    if (kind !== "答練" && (!Number.isInteger(number) || number <= 0)) return alert("問題番号は1以上の整数です");
 
-    const sList = await listSeries(cdb); let s = sList.find(x => x.name === seriesName);
-    if (!s) { await addSeries(cdb, seriesName); s = (await listSeries(cdb)).find(x => x.name === seriesName); }
-    const problemId = await getOrCreateProblem(cdb, s.id, kind, number);
-    const nextNo = await getNextAttemptNo(cdb, problemId);
-    try { await insertAttempt(cdb, problemId, nextNo, doneDate, minutes, score, att); }
-    catch (e) { return alert("同じ学習日/回数が既にあるようです"); }
-    selectedProblemId = problemId; toast(`追加/記録: ${seriesName} ${kind}${number??""} ${doneDate} ${nextNo}回目`); await refreshAll();
+    const unitId = await getOrCreateUnit(db, Number(currentSubjectId), code);
+
+    if (title) {
+      const units = await listUnitsBySubject(db, Number(currentSubjectId));
+      const u = units.find(x => x.id === unitId);
+      if (u && (!u.title || overwrite)) await updateUnitTitle(db, unitId, title);
+    }
+
+    let reviewNo = null;
+    if (rnoInput) {
+      reviewNo = Number(rnoInput);
+      if (!Number.isInteger(reviewNo) || reviewNo <= 0) return alert("回数は正の整数です");
+      const revs = await listReviewsByUnit(db, unitId);
+      if (revs.some(r => r.reviewNo === reviewNo)) return alert(`回数 ${reviewNo} は既にあります。編集か再採番をしてください。`);
+    } else {
+      reviewNo = await getNextReviewNo(db, unitId);
+    }
+
+    try {
+      await insertReview(db, unitId, reviewNo, doneDate);
+    } catch (e) {
+      return alert("同じ学習日/回数が既にあるようです");
+    }
+    selectedUnitId = unitId;
+    toast(`追加/記録: ${code} ${doneDate} ${reviewNo}回目`);
+    await refreshAll();
   };
 
-  $("deleteProblemBtn").onclick = async () => {
-    if (!selectedProblemId) return alert("削除する問題をマトリクスから選んでください");
-    if (!confirm("この問題を削除（履歴も全て削除）してよいですか？")) return;
-    await deleteProblem(cdb, selectedProblemId);
-    selectedProblemId = null; selectedAttemptId = null; await refreshAll();
+  $("deleteUnitBtn").onclick = async () => {
+    if (!selectedUnitId) return alert("削除する単元を一覧から選んでください");
+    if (!confirm("この単元を削除（履歴も全部削除）してよいですか？")) return;
+    await deleteUnit(db, selectedUnitId);
+    selectedUnitId = null;
+    selectedReviewId = null;
+    await refreshAll();
   };
 
-  $("updateAttemptBtn").onclick = async () => {
-    if (!selectedProblemId || !selectedAttemptId) return alert("編集する履歴を選んでください");
-    const newNo = Number($("editNo").value);
-    const newDate = $("editDate").value;
-    const newMin = $("editTime").value ? Number($("editTime").value) : null;
-    const newScore = $("editScore").value ? Number($("editScore").value) : null;
-    const newAtt = $("editAtt").value;
+  $("updateReviewBtn").onclick = async () => {
+    if (!selectedUnitId || !selectedReviewId) return alert("編集する履歴を選んでください");
+    const newNo = Number($("editReviewNo").value);
+    const newDate = $("editReviewDate").value;
     if (!Number.isInteger(newNo) || newNo <= 0) return alert("回数は正の整数です");
-    if (!newDate) return alert("日付を入れてください");
-    const list = await listAttemptsByProblem(cdb, selectedProblemId);
-    if (list.some(a => a.id !== selectedAttemptId && a.attemptNo === newNo)) return alert(`回数 ${newNo} は既にあります`);
-    if (list.some(a => a.id !== selectedAttemptId && a.doneDate === newDate)) return alert(`学習日 ${newDate} は既にあります`);
-    try { await updateAttempt(cdb, selectedAttemptId, { attemptNo: newNo, doneDate: newDate, minutes: newMin, score: newScore, att: newAtt }); }
-    catch (e) { return alert("一意制約に抵触しました（回数 or 日付の重複）"); }
-    toast("編集しました"); await refreshAll();
+    if (!newDate) return alert("学習日を入れてください");
+    const revs = await listReviewsByUnit(db, selectedUnitId);
+    if (revs.some(r => r.id !== selectedReviewId && r.reviewNo === newNo)) return alert(`回数 ${newNo} が既にあります`);
+    if (revs.some(r => r.id !== selectedReviewId && r.doneDate === newDate)) return alert(`学習日 ${newDate} が既にあります`);
+    try {
+      await updateReview(db, selectedReviewId, selectedUnitId, newNo, newDate);
+    } catch (e) {
+      return alert("一意制約に抵触しました（回数 or 日付の重複）");
+    }
+    toast("編集しました");
+    await refreshAll();
   };
 
-  $("deleteAttemptBtn").onclick = async () => {
-    if (!selectedAttemptId) return alert("削除する履歴を選んでください");
-    if (!confirm("この学習履歴を削除してもよいですか？")) return;
-    await deleteAttempt(cdb, selectedAttemptId);
-    selectedAttemptId = null; toast("削除しました"); await refreshAll();
+  $("deleteReviewBtn").onclick = async () => {
+    if (!selectedReviewId) return alert("削除する履歴を選んでください");
+    if (!confirm("この復習履歴を削除してもよいですか？")) return;
+    await deleteReview(db, selectedReviewId);
+    selectedReviewId = null;
+    toast("削除しました");
+    await refreshAll();
   };
 
   $("renumberBtn").onclick = async () => {
-    if (!selectedProblemId) return alert("再採番する問題を選んでください");
-    if (!confirm("この問題の履歴を日付順に1..nへ再採番します。よろしいですか？")) return;
-    await renumberAttempts(cdb, selectedProblemId); toast("再採番しました"); await refreshAll();
+    if (!selectedUnitId) return alert("再採番する単元を選んでください");
+    if (!confirm("この単元の履歴を日付順に1..nへ再採番します。よろしいですか？")) return;
+    await renumberReviews(db, selectedUnitId);
+    toast("再採番しました");
+    await refreshAll();
   };
 
+  // Export / Import / Wipe
   $("exportBtn").onclick = async () => {
-    const data = await exportCalcJson(cdb);
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob); const a = document.createElement("a");
-    a.href = url; a.download = `calc-sync-${toYmdLocal(new Date())}.json`; a.click(); URL.revokeObjectURL(url);
+    const data = await exportJson(db);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type:"application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `study-sync-${toYmdLocal(new Date())}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
   $("importFile").onchange = async (e) => {
     const file = e.target.files?.[0]; if (!file) return;
@@ -243,14 +408,25 @@ async function initCalc() {
     try {
       const data = JSON.parse(text);
       if (!confirm("インポートします。この端末のデータは上書きされます。よろしいですか？")) return;
-      await importCalcJsonOverwrite(cdb, data);
-      toast("インポート完了"); selectedProblemId = null; selectedAttemptId = null; await refreshSeries();
-    } catch (err) { alert("インポート失敗: " + err.message); }
-    finally { e.target.value = ""; }
+      await importJsonOverwrite(db, data);
+      toast("インポート完了");
+      selectedUnitId = null; selectedReviewId = null;
+      await refreshSubjects();
+    } catch (err) {
+      alert("インポート失敗: " + err.message);
+    } finally {
+      e.target.value = "";
+    }
   };
   $("wipeBtn").onclick = async () => {
     if (!confirm("この端末のデータを全消去します。よろしいですか？")) return;
-    const t = cdb.transaction(["attempts","problems","series"], "readwrite");
-    t.objectStore("attempts").clear(); t.objectStore("problems").clear(); t.objectStore("series").clear();
-    await new Promise((res,rej)=>{ t.oncomplete=()=>res(); t.onerror=()=>rej(t.error); });
-    selectedProblemId = null; selectedAttemptId = null; await refreshSeries(); toast("全消去しました");
+    await clearAll(db);
+    await seedDefaultSubjects(db); // ★ 消去後も既定科目を復元
+    selectedUnitId = null; selectedReviewId = null;
+    await refreshSubjects();
+    toast("全消去しました");
+  };
+}
+
+window.addEventListener("load", init);
+``
