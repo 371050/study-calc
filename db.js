@@ -1,7 +1,7 @@
 
-// ====== 計算進捗ツール IndexedDB（subjects → series → problems → attempts） ======
-const CALC_DB_NAME = "calc_progress_db";
-const CALC_DB_VERSION = 2; // ★ v1→v2 で subjects を導入＆マイグレーション
+// ====== 計算進捗ツール（フラット版）IndexedDB ======
+const DB_NAME = "calc_progress_flat_db";
+const DB_VERSION = 1;
 
 /* --- Local YYYY-MM-DD --- */
 function toYmdLocal(d = new Date()) {
@@ -15,70 +15,32 @@ function addDaysLocal(ymd, n) {
   return toYmdLocal(dt);
 }
 
-function openCalcDb() {
+function openDb() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(CALC_DB_NAME, CALC_DB_VERSION);
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onerror = () => reject(req.error);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
-      const oldV = e.oldVersion || 0;
 
-      // v1 には subjects が無かった
-      // ---- subjects ----
-      if (!db.objectStoreNames.contains("subjects")) {
-        const subjects = db.createObjectStore("subjects", { keyPath: "id", autoIncrement: true });
-        subjects.createIndex("by_sort", "sortOrder");
-        subjects.createIndex("by_name", "name", { unique: true });
-      }
+      // 教科
+      const subjects = db.createObjectStore("subjects", { keyPath: "id", autoIncrement: true });
+      subjects.createIndex("by_sort", "sortOrder");
+      subjects.createIndex("by_name", "name", { unique: true });
 
-      // ---- series ----
-      if (!db.objectStoreNames.contains("series")) {
-        const series = db.createObjectStore("series", { keyPath: "id", autoIncrement: true });
-        series.createIndex("by_subject", "subjectId");
-        series.createIndex("by_subject_name", ["subjectId", "name"], { unique: true });
-        series.createIndex("by_sort_in_subject", ["subjectId","sortOrder"]);
-      } else {
-        const series = e.currentTarget.transaction.objectStore("series");
-        // 新インデックス（存在しない場合のみ）
-        if (!series.indexNames.contains("by_subject")) series.createIndex("by_subject", "subjectId");
-        if (!series.indexNames.contains("by_subject_name")) series.createIndex("by_subject_name", ["subjectId","name"], { unique: true });
-        if (!series.indexNames.contains("by_sort_in_subject")) series.createIndex("by_sort_in_subject", ["subjectId","sortOrder"]);
-      }
+      // 問題（フラット）
+      // kind: "問題" | "確認テスト" | "答練"
+      // unitCode: string|null  (問題のみ "1-1" 等。確認テスト/答練は null)
+      // number: 整数 (問題番号 または 第N回の N)
+      const problems = db.createObjectStore("problems", { keyPath: "id", autoIncrement: true });
+      problems.createIndex("by_subject", "subjectId");
+      problems.createIndex("by_subject_kind_unit_no", ["subjectId","kind","unitCode","number"], { unique: true });
 
-      // ---- problems ----
-      if (!db.objectStoreNames.contains("problems")) {
-        const problems = db.createObjectStore("problems", { keyPath: "id", autoIncrement: true });
-        problems.createIndex("by_series", "seriesId");
-        problems.createIndex("by_series_kind_no", ["seriesId", "kind", "number"], { unique: true });
-      }
-
-      // ---- attempts ----
-      if (!db.objectStoreNames.contains("attempts")) {
-        const attempts = db.createObjectStore("attempts", { keyPath: "id", autoIncrement: true });
-        attempts.createIndex("by_problem", "problemId");
-        attempts.createIndex("by_problem_no", ["problemId", "attemptNo"], { unique: true });
-        attempts.createIndex("by_problem_date", ["problemId", "doneDate"], { unique: true });
-        attempts.createIndex("by_date", "doneDate");
-      }
-
-      // --- v1→v2 マイグレーション：series に subjectId を付与し、"共通" 科目を作る ---
-      if (oldV < 2) {
-        const subjects = e.currentTarget.transaction.objectStore("subjects");
-        // id=1 で「共通」を作成（明示 id 指定）
-        subjects.put({ id: 1, name: "共通", sortOrder: 0, createdAt: new Date().toISOString() });
-
-        const seriesStore = e.currentTarget.transaction.objectStore("series");
-        // series の全件を読み、subjectId が無ければ 1 を付与
-        const getAllReq = seriesStore.getAll();
-        getAllReq.onsuccess = () => {
-          const list = getAllReq.result || [];
-          list.forEach(s => {
-            if (s.subjectId == null) { s.subjectId = 1; }
-            if (s.sortOrder == null) { s.sortOrder = 0; }
-            seriesStore.put(s);
-          });
-        };
-      }
+      // 学習履歴
+      const attempts = db.createObjectStore("attempts", { keyPath: "id", autoIncrement: true });
+      attempts.createIndex("by_problem", "problemId");
+      attempts.createIndex("by_problem_no", ["problemId","attemptNo"], { unique: true });
+      attempts.createIndex("by_problem_date", ["problemId","doneDate"], { unique: true });
+      attempts.createIndex("by_date", "doneDate");
     };
     req.onsuccess = () => resolve(req.result);
   });
@@ -132,89 +94,48 @@ async function moveSubject(db, subjectId, direction) {
   return new Promise((resolve, reject) => { t.oncomplete = () => resolve(); t.onerror = () => reject(t.error); });
 }
 
-/* ---------- Series（科目配下） ---------- */
-async function listSeriesBySubject(db, subjectId) {
-  return new Promise((resolve, reject) => {
-    const { stores } = tx(db, ["series"]);
-    const idx = stores.series.index("by_subject");
-    const req = idx.getAll(IDBKeyRange.only(subjectId));
-    req.onerror = () => reject(req.error);
-    req.onsuccess = () => {
-      const list = req.result ?? [];
-      list.sort((a,b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name, "ja"));
-      resolve(list);
-    };
-  });
-}
-async function addSeries(db, subjectId, name) {
-  name = name.trim();
-  if (!name) throw new Error("シリーズ名が空です");
-  const list = await listSeriesBySubject(db, subjectId);
-  const sortOrder = list.length ? Math.max(...list.map(s => s.sortOrder ?? 0)) + 1 : 0;
-  const { t, stores } = tx(db, ["series"], "readwrite");
-  stores.series.add({ subjectId, name, sortOrder, createdAt: new Date().toISOString() });
-  return new Promise((resolve, reject) => { t.oncomplete = () => resolve(); t.onerror = () => reject(t.error); });
-}
-async function moveSeries(db, subjectId, seriesId, direction) {
-  const list = await listSeriesBySubject(db, subjectId);
-  const idx = list.findIndex(s => s.id === seriesId);
-  if (idx < 0) return;
-  const j = idx + direction;
-  if (j < 0 || j >= list.length) return;
-  [list[idx], list[j]] = [list[j], list[idx]];
-  const { t, stores } = tx(db, ["series"], "readwrite");
-  list.forEach((s,i) => { s.sortOrder = i; stores.series.put(s); });
-  return new Promise((resolve, reject) => { t.oncomplete = () => resolve(); t.onerror = () => reject(t.error); });
-}
-async function getOrCreateSeries(db, subjectId, name) {
-  return new Promise((resolve, reject) => {
-    const { stores } = tx(db, ["series"], "readwrite");
-    const idx = stores.series.index("by_subject_name");
-    const g = idx.get([subjectId, name]);
-    g.onerror = () => reject(g.error);
-    g.onsuccess = () => {
-      const found = g.result;
-      if (found) return resolve(found.id);
-      // 新規追加（末尾）
-      const addReq = stores.series.add({ subjectId, name, sortOrder: 999999, createdAt: new Date().toISOString() });
-      addReq.onerror = () => reject(addReq.error);
-      addReq.onsuccess = () => resolve(addReq.result);
-    };
-  });
-}
-
-/* ---------- Problems ---------- */
-async function getOrCreateProblem(db, seriesId, kind, number /* number|null */) {
+/* ---------- Problems（フラット） ---------- */
+async function getOrCreateProblem(db, subjectId, kind, unitCode /*nullable*/, number) {
   const { t, stores } = tx(db, ["problems"], "readwrite");
-  const idx = stores.problems.index("by_series_kind_no");
-  const req = idx.get([seriesId, kind, number ?? null]);
+  const idx = stores.problems.index("by_subject_kind_unit_no");
+  const req = idx.get([subjectId, kind, unitCode ?? null, number]);
   return new Promise((resolve, reject) => {
     req.onerror = () => reject(req.error);
     req.onsuccess = () => {
       const found = req.result;
       if (found) return resolve(found.id);
-      const addReq = stores.problems.add({ seriesId, kind, number: number ?? null, createdAt: new Date().toISOString() });
+      const addReq = stores.problems.add({ subjectId, kind, unitCode: unitCode ?? null, number, createdAt: new Date().toISOString() });
       addReq.onerror = () => reject(addReq.error);
       addReq.onsuccess = () => resolve(addReq.result);
     };
   });
 }
-async function listProblemsBySeries(db, seriesId) {
+async function listProblemsBySubject(db, subjectId) {
   return new Promise((resolve, reject) => {
     const { stores } = tx(db, ["problems"]);
-    const idx = stores.problems.index("by_series");
-    const req = idx.getAll(IDBKeyRange.only(seriesId));
+    const idx = stores.problems.index("by_subject");
+    const req = idx.getAll(IDBKeyRange.only(subjectId));
     req.onerror = () => reject(req.error);
     req.onsuccess = () => {
       const all = req.result ?? [];
-      all.sort((a,b) =>
-        a.kind.localeCompare(b.kind, "ja") ||
-        ((a.number ?? 0) - (b.number ?? 0)) ||
-        (a.id - b.id)
-      );
+      all.sort(problemComparator);
       resolve(all);
     };
   });
+}
+function problemComparator(a, b) {
+  // ① 問題（unitCode 昇順 → number 昇順）
+  // ② 確認テスト（number 昇順）
+  // ③ 答練（number 昇順）
+  const rank = (p) => (p.kind === "問題" ? 0 : p.kind === "確認テスト" ? 1 : 2);
+  const ra = rank(a), rb = rank(b);
+  if (ra !== rb) return ra - rb;
+  if (a.kind === "問題" && b.kind === "問題") {
+    const uc = (a.unitCode ?? "").localeCompare(b.unitCode ?? "", "ja");
+    if (uc !== 0) return uc;
+    return (a.number ?? 0) - (b.number ?? 0);
+  }
+  return (a.number ?? 0) - (b.number ?? 0);
 }
 async function deleteProblem(db, problemId) {
   const { t, stores } = tx(db, ["attempts","problems"], "readwrite");
@@ -258,8 +179,8 @@ async function insertAttempt(db, problemId, attemptNo, doneDate, minutes, score,
   const { t, stores } = tx(db, ["attempts"], "readwrite");
   stores.attempts.add({
     problemId, attemptNo, doneDate,
-    minutes: minutes ?? null,
-    score: score ?? null,
+    minutes: (minutes ?? null),
+    score: (score ?? null),
     att, createdAt: new Date().toISOString()
   });
   return new Promise((resolve, reject) => { t.oncomplete = () => resolve(); t.onerror = () => reject(t.error); });
@@ -311,34 +232,20 @@ async function computeProblemStatus(db, problem) {
 }
 
 /* ---------- Export / Import / Clear ---------- */
-async function exportCalcJson(db) {
+async function exportJson(db) {
   const subjects = await getAll(db, "subjects");
-  const series = await getAll(db, "series");
   const problems = await getAll(db, "problems");
   const attempts = await getAll(db, "attempts");
-  return { schemaVersion: 2, exportedAt: new Date().toISOString(), subjects, series, problems, attempts };
+  return { schemaVersion: 1, exportedAt: new Date().toISOString(), subjects, problems, attempts };
 }
-async function importCalcJsonOverwrite(db, data) {
-  // v1 互換：subjectsが無ければ作って割り当て
-  if (!data || !data.problems || !data.attempts || !data.series) {
-    throw new Error("不正なJSON（series/problems/attempts は必須）");
+async function importJsonOverwrite(db, data) {
+  if (!data || !data.subjects || !data.problems || !data.attempts) {
+    throw new Error("不正なJSON（subjects/problems/attempts が必須）");
   }
-  const { t, stores } = tx(db, ["attempts","problems","series","subjects"], "readwrite");
-  stores.attempts.clear(); stores.problems.clear(); stores.series.clear(); stores.subjects.clear();
-
-  let subjectIdMap = new Map();
-  if (data.subjects && data.subjects.length) {
-    data.subjects.forEach(s => stores.subjects.put(s));
-    subjectIdMap = new Map(data.subjects.map(s => [s.id, s.id]));
-  } else {
-    // v1 → デフォルト科目「共通」を生成
-    stores.subjects.put({ id: 1, name: "共通", sortOrder: 0, createdAt: new Date().toISOString() });
-  }
-
-  // series の subjectId が欠落していれば 1 を付与
-  data.series.forEach(s => { if (s.subjectId == null) s.subjectId = 1; stores.series.put(s); });
+  const { t, stores } = tx(db, ["attempts","problems","subjects"], "readwrite");
+  stores.attempts.clear(); stores.problems.clear(); stores.subjects.clear();
+  data.subjects.forEach(s => stores.subjects.put(s));
   data.problems.forEach(p => stores.problems.put(p));
   data.attempts.forEach(a => stores.attempts.put(a));
-
   return new Promise((resolve, reject) => { t.oncomplete = () => resolve(); t.onerror = () => reject(t.error); });
 }
