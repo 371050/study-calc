@@ -1,5 +1,5 @@
 
-// ====== 計算進捗ツール（フラット版）IndexedDB ======
+// ====== 計算進捗ツール（フラット） IndexedDB ======
 const DB_NAME = "calc_progress_flat_db";
 const DB_VERSION = 1;
 
@@ -22,20 +22,20 @@ function openDb() {
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
 
-      // 教科
+      // subjects
       const subjects = db.createObjectStore("subjects", { keyPath: "id", autoIncrement: true });
       subjects.createIndex("by_sort", "sortOrder");
       subjects.createIndex("by_name", "name", { unique: true });
 
-      // 問題（フラット）
+      // problems（フラット）
       // kind: "問題" | "確認テスト" | "答練"
-      // unitCode: string|null  (問題のみ "1-1" 等。確認テスト/答練は null)
-      // number: 整数 (問題番号 または 第N回の N)
+      // unitCode: string|null（問題のみ "1-1" 等）
+      // number: 整数（問題番号 or 第N回のN）
       const problems = db.createObjectStore("problems", { keyPath: "id", autoIncrement: true });
       problems.createIndex("by_subject", "subjectId");
       problems.createIndex("by_subject_kind_unit_no", ["subjectId","kind","unitCode","number"], { unique: true });
 
-      // 学習履歴
+      // attempts
       const attempts = db.createObjectStore("attempts", { keyPath: "id", autoIncrement: true });
       attempts.createIndex("by_problem", "problemId");
       attempts.createIndex("by_problem_no", ["problemId","attemptNo"], { unique: true });
@@ -124,9 +124,7 @@ async function listProblemsBySubject(db, subjectId) {
   });
 }
 function problemComparator(a, b) {
-  // ① 問題（unitCode 昇順 → number 昇順）
-  // ② 確認テスト（number 昇順）
-  // ③ 答練（number 昇順）
+  // 並び順：①問題（unitCode昇順→number昇順）→②確認テスト（number昇順）→③答練（number昇順）
   const rank = (p) => (p.kind === "問題" ? 0 : p.kind === "確認テスト" ? 1 : 2);
   const ra = rank(a), rb = rank(b);
   if (ra !== rb) return ra - rb;
@@ -249,3 +247,4 @@ async function importJsonOverwrite(db, data) {
   data.attempts.forEach(a => stores.attempts.put(a));
   return new Promise((resolve, reject) => { t.oncomplete = () => resolve(); t.onerror = () => reject(t.error); });
 }
+``
