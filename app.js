@@ -16,70 +16,33 @@ function escapeHtml(s){
 }
 function toast(msg){ $("log").textContent = msg; setTimeout(()=>{$("log").textContent="";}, 3000); }
 
-/* ---- 入力正規化 ----
-   全角数字→半角、全角スペース→半角、全角ハイフン→半角、
-   余分な空白の圧縮
-*/
-function normalizeInput(s) {
+/* ---- 正規化ユーティリティ ---- */
+function normalizeHalfWidth(s) {
   if (!s) return "";
+  // 全角数字→半角
   const z2hDigit = ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0);
   s = s.replace(/[０-９]/g, z2hDigit);
+  // 全角スペース→半角
   s = s.replace(/\u3000/g, " ");
+  // 全角ハイフン/長音など→半角-
   s = s.replace(/[－ー―〜～]/g, "-");
+  // 連続空白圧縮
   s = s.replace(/\s+/g, " ").trim();
   return s;
 }
-
-/* ---- 入力パース（クイック） ----
-   受け付ける例：
-   - "1-1 問題3"
-   - "確認テスト 第2回"（"確認テスト 2回" や "確認テスト 2" も可）
-   - "答練 第4回"（同上）
-   区切り：空白 / 改行 / 読点（、） / 半角・全角カンマ
-*/
 const UNIT_RE = /^\d+\-\d+$/;
-function parseQuick(text) {
-  const norm = normalizeInput(text);
-  const tokens = norm
-    .split(/[,\uFF0C\u3001\s]+/)
-    .map(s => s.trim())
-    .filter(Boolean);
 
-  const out = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-
-    // 1) X-X 問題N （分割／結合どちらも）
-    let m = t.match(/^(?<unit>\d+\-\d+)$/);
-    if (m && i + 1 < tokens.length) {
-      const m2 = tokens[i + 1].match(/^問題\s*(?<num>\d+)$/);
-      if (m2) { out.push({ kind:"問題", unitCode:m.groups.unit, number:Number(m2.groups.num) }); i++; continue; }
-    }
-    m = t.match(/^(?<unit>\d+\-\d+)\s*問題\s*(?<num>\d+)$/);
-    if (m) { out.push({ kind:"問題", unitCode:m.groups.unit, number:Number(m.groups.num) }); continue; }
-
-    // 2) 確認テスト 第N回 / 確認テスト N回 / 確認テスト N（分割／結合）
-    m = t.match(/^確認テスト$/);
-    if (m && i + 1 < tokens.length) {
-      const m2 = tokens[i + 1].match(/^第?(?<num>\d+)回?$/);
-      if (m2) { out.push({ kind:"確認テスト", unitCode:null, number:Number(m2.groups.num) }); i++; continue; }
-    }
-    m = t.match(/^確認テスト\s*第?(?<num>\d+)回?$/);
-    if (m) { out.push({ kind:"確認テスト", unitCode:null, number:Number(m.groups.num) }); continue; }
-
-    // 3) 答練 第N回 / 答練 N回 / 答練 N（分割／結合）
-    m = t.match(/^答練$/);
-    if (m && i + 1 < tokens.length) {
-      const m2 = tokens[i + 1].match(/^第?(?<num>\d+)回?$/);
-      if (m2) { out.push({ kind:"答練", unitCode:null, number:Number(m2.groups.num) }); i++; continue; }
-    }
-    m = t.match(/^答練\s*第?(?<num>\d+)回?$/);
-    if (m) { out.push({ kind:"答練", unitCode:null, number:Number(m.groups.num) }); continue; }
-
-    // いずれにも該当しない → 形式エラー
-    out.push({ error: t });
-  }
-  return out;
+/** 「問題3 / 第2回 / 3 / 2」から数値Nを抽出 */
+function extractNumberFromLabel(label) {
+  const s = normalizeHalfWidth(label);
+  // "問題3" / "第3回" / "3" のいずれもOK
+  let m = s.match(/^問題\s*(\d+)$/);
+  if (m) return Number(m[1]);
+  m = s.match(/^第?\s*(\d+)\s*回?$/);
+  if (m) return Number(m[1]);
+  m = s.match(/^(\d+)$/);
+  if (m) return Number(m[1]);
+  return null;
 }
 
 function problemLabel(p) {
@@ -290,6 +253,17 @@ async function init() {
   $("quickAtt").value = "△";
   $("formAtt").value  = "△";
 
+  // 「種類」に応じて単元コード欄の表示切替（クイック/フォーム）
+  function toggleRowsByKind() {
+    const qk = $("quickKind").value;
+    $("quickUnitRow").classList.toggle("hide", qk !== "問題");
+    const fk = $("formKind").value;
+    $("formUnitRow").classList.toggle("hide", fk !== "問題");
+  }
+  $("quickKind").addEventListener("change", toggleRowsByKind);
+  $("formKind").addEventListener("change", toggleRowsByKind);
+  toggleRowsByKind();
+
   if ("serviceWorker" in navigator) { navigator.serviceWorker.register("./sw.js").catch(()=>{}); }
 
   await refreshSubjects();
@@ -313,32 +287,60 @@ async function init() {
     if (!currentSubjectId) return; await moveSubject(db, Number(currentSubjectId), +1); await refreshSubjects(Number(currentSubjectId));
   };
 
-  // クイック記録
+  // クイック記録（新仕様）
   $("recordQuickBtn").onclick = async () => {
     if (!currentSubjectId) return alert("教科を選んでください");
-    const entries = parseQuick($("quickInput").value);
+
+    const kind = $("quickKind").value;               // 問題 / 確認テスト / 答練
+    let unitCode = $("quickUnitCode").value.trim();  // 種類=問題の時だけ使用
+    let numberLabel = $("quickNumberLabel").value.trim();
+
+    // 正規化（全角→半角 等）
+    unitCode = normalizeHalfWidth(unitCode);
+    numberLabel = normalizeHalfWidth(numberLabel);
+
     const doneDate = $("quickDate").value;
     const minutes = $("quickTime").value ? Number($("quickTime").value) : null;
     const score = $("quickScore").value ? Number($("quickScore").value) : null;
     const att = $("quickAtt").value;
+
     if (!doneDate) return alert("学習日を入れてください");
 
-    for (const it of entries) {
-      if (it.error) { toast(`形式エラー: ${it.error}`); continue; }
-      if (it.kind === "問題" && (!it.unitCode || !UNIT_RE.test(it.unitCode))) { toast(`単元コード形式エラー: ${it.unitCode}`); continue; }
-      const problemId = await getOrCreateProblem(db, Number(currentSubjectId), it.kind, it.unitCode ?? null, it.number);
-      const nextNo = await getNextAttemptNo(db, problemId);
-      try { await insertAttempt(db, problemId, nextNo, doneDate, minutes, score, att); } catch (e) { /* 同日 or 同回数重複 */ }
+    const num = extractNumberFromLabel(numberLabel);
+    if (!Number.isInteger(num) || num <= 0) {
+      return alert("番号ラベルから正しい数字が読み取れません（例：問題3 / 第2回 / 3 / 2）");
     }
-    $("quickInput").value = ""; $("quickTime").value = ""; $("quickScore").value = "";
-    toast("記録しました"); await refreshAll();
+    if (kind === "問題") {
+      if (!UNIT_RE.test(unitCode)) return alert("単元コードは 1-1 形式（数字-数字）です");
+    } else {
+      unitCode = null;
+    }
+
+    // 問題を作成/取得 → attempt 追加
+    const problemId = await getOrCreateProblem(db, Number(currentSubjectId), kind, unitCode, num);
+    const nextNo = await getNextAttemptNo(db, problemId);
+    try {
+      await insertAttempt(db, problemId, nextNo, doneDate, minutes, score, att);
+    } catch (e) {
+      return alert("同じ学習日/回数が既にあるようです");
+    }
+
+    // 入力欄リセット（種類は維持）
+    $("quickNumberLabel").value = "";
+    $("quickTime").value = "";
+    $("quickScore").value = "";
+    if (kind === "問題") $("quickUnitCode").value = "";
+
+    toast("記録しました");
+    await refreshAll();
   };
 
-  // フォーム記録
+  // フォーム記録（従来どおり）
   $("addOrRecordBtn").onclick = async () => {
     if (!currentSubjectId) return alert("教科を選んでください");
     const kind = $("formKind").value;
-    const unitCode = $("formUnitCode").value.trim();
+    const unitCodeRaw = $("formUnitCode").value.trim();
+    const unitCode = kind === "問題" ? normalizeHalfWidth(unitCodeRaw) : null;
     const number = $("formNumber").value ? Number($("formNumber").value) : null;
     const doneDate = $("formDate").value;
     const minutes = $("formTime").value ? Number($("formTime").value) : null;
@@ -349,12 +351,12 @@ async function init() {
     if (!Number.isInteger(number) || number <= 0) return alert("番号は1以上の整数です");
     if (kind === "問題" && (!UNIT_RE.test(unitCode))) return alert("単元コードは 1-1 形式（数字-数字）です");
 
-    const problemId = await getOrCreateProblem(db, Number(currentSubjectId), kind, (kind==="問題"?unitCode:null), number);
+    const problemId = await getOrCreateProblem(db, Number(currentSubjectId), kind, unitCode, number);
     const nextNo = await getNextAttemptNo(db, problemId);
     try { await insertAttempt(db, problemId, nextNo, doneDate, minutes, score, att); }
     catch (e) { return alert("同じ学習日/回数が既にあるようです"); }
     selectedProblemId = problemId;
-    toast(`追加/記録: ${problemLabel({kind, unitCode: (kind==="問題"?unitCode:null), number})} ${doneDate} ${nextNo}回目`);
+    toast(`追加/記録: ${problemLabel({kind, unitCode, number})} ${doneDate} ${nextNo}回目`);
     await refreshAll();
   };
 
