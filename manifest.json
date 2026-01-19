@@ -1,7 +1,7 @@
 
 {
-  "name": "計算進捗（フラット）",
-  "short_name": "進捗",
+  "name": "問題演習進捗ツール",
+  "short_name": "問題演習進捗ツール",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#0b1020",
