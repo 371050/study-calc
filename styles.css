@@ -26,3 +26,4 @@ label input { flex:1; }
 .filebtn { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line); padding:8px 10px; border-radius: 8px; background:#0e1530; cursor:pointer; }
 .filebtn input { display:none; }
 footer { color: var(--muted); }
+``
