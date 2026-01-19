@@ -5,60 +5,78 @@ let selectedProblemId = null;
 let selectedAttemptId = null;
 
 function $(id){ return document.getElementById(id); }
-function escapeHtml(s){ return String(s).replace(/[&<>\"']/g, c => ({'&':'&','<':'<','>':'>','"':'"','\'':'\''}[c])); }
+function escapeHtml(s){
+  return String(s).replace(/[&<>\"']/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[c]));
+}
 function toast(msg){ $("log").textContent = msg; setTimeout(()=>{$("log").textContent="";}, 3000); }
 
-/* ---- 入力パース ----
+/* ---- 入力正規化 ----
+   全角数字→半角、全角スペース→半角、全角ハイフン→半角、
+   余分な空白の圧縮
+*/
+function normalizeInput(s) {
+  if (!s) return "";
+  const z2hDigit = ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0);
+  s = s.replace(/[０-９]/g, z2hDigit);
+  s = s.replace(/\u3000/g, " ");
+  s = s.replace(/[－ー―〜～]/g, "-");
+  s = s.replace(/\s+/g, " ").trim();
+  return s;
+}
+
+/* ---- 入力パース（クイック） ----
    受け付ける例：
    - "1-1 問題3"
    - "確認テスト 第2回"（"確認テスト 2回" や "確認テスト 2" も可）
    - "答練 第4回"（同上）
-   区切り：空白 / 改行 / 読点（、）
+   区切り：空白 / 改行 / 読点（、） / 半角・全角カンマ
 */
 const UNIT_RE = /^\d+\-\d+$/;
 function parseQuick(text) {
-  const tokens = text.trim().split(/[、\s]+/).map(s=>s.trim()).filter(Boolean);
+  const norm = normalizeInput(text);
+  const tokens = norm
+    .split(/[,\uFF0C\u3001\s]+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
   const out = [];
-  for (let i=0; i<tokens.length; i++) {
+  for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
 
-    // 1) "X-X 問題N"
+    // 1) X-X 問題N （分割／結合どちらも）
     let m = t.match(/^(?<unit>\d+\-\d+)$/);
-    if (m && i+1 < tokens.length) {
-      const t2 = tokens[i+1];
-      const m2 = t2.match(/^問題\s*(?<num>\d+)$/);
-      if (m2) {
-        out.push({ kind:"問題", unitCode:m.groups.unit, number:Number(m2.groups.num) });
-        i++; continue;
-      }
+    if (m && i + 1 < tokens.length) {
+      const m2 = tokens[i + 1].match(/^問題\s*(?<num>\d+)$/);
+      if (m2) { out.push({ kind:"問題", unitCode:m.groups.unit, number:Number(m2.groups.num) }); i++; continue; }
     }
     m = t.match(/^(?<unit>\d+\-\d+)\s*問題\s*(?<num>\d+)$/);
-    if (m) {
-      out.push({ kind:"問題", unitCode:m.groups.unit, number:Number(m.groups.num) });
-      continue;
-    }
+    if (m) { out.push({ kind:"問題", unitCode:m.groups.unit, number:Number(m.groups.num) }); continue; }
 
-    // 2) "確認テスト 第N回" / "確認テスト N回" / "確認テスト N"
+    // 2) 確認テスト 第N回 / 確認テスト N回 / 確認テスト N（分割／結合）
     m = t.match(/^確認テスト$/);
-    if (m && i+1 < tokens.length) {
-      const t2 = tokens[i+1];
-      const m2 = t2.match(/^第?(?<num>\d+)回?$/);
+    if (m && i + 1 < tokens.length) {
+      const m2 = tokens[i + 1].match(/^第?(?<num>\d+)回?$/);
       if (m2) { out.push({ kind:"確認テスト", unitCode:null, number:Number(m2.groups.num) }); i++; continue; }
     }
     m = t.match(/^確認テスト\s*第?(?<num>\d+)回?$/);
     if (m) { out.push({ kind:"確認テスト", unitCode:null, number:Number(m.groups.num) }); continue; }
 
-    // 3) "答練 第N回" / "答練 N回" / "答練 N"
+    // 3) 答練 第N回 / 答練 N回 / 答練 N（分割／結合）
     m = t.match(/^答練$/);
-    if (m && i+1 < tokens.length) {
-      const t2 = tokens[i+1];
-      const m2 = t2.match(/^第?(?<num>\d+)回?$/);
+    if (m && i + 1 < tokens.length) {
+      const m2 = tokens[i + 1].match(/^第?(?<num>\d+)回?$/);
       if (m2) { out.push({ kind:"答練", unitCode:null, number:Number(m2.groups.num) }); i++; continue; }
     }
     m = t.match(/^答練\s*第?(?<num>\d+)回?$/);
     if (m) { out.push({ kind:"答練", unitCode:null, number:Number(m.groups.num) }); continue; }
 
-    // その他は形式エラーとして返す
+    // いずれにも該当しない → 形式エラー
     out.push({ error: t });
   }
   return out;
@@ -268,6 +286,10 @@ async function init() {
   const today = toYmdLocal(new Date());
   $("quickDate").value = today; $("formDate").value = today;
 
+  // 初期到達度（復習予定に乗せやすいよう △）
+  $("quickAtt").value = "△";
+  $("formAtt").value  = "△";
+
   if ("serviceWorker" in navigator) { navigator.serviceWorker.register("./sw.js").catch(()=>{}); }
 
   await refreshSubjects();
@@ -346,7 +368,7 @@ async function init() {
   $("updateAttemptBtn").onclick = async () => {
     if (!selectedProblemId || !selectedAttemptId) return alert("編集する履歴を選んでください");
     const newNo = Number($("editNo").value);
-    const newDate = $("editReviewDate") ? $("editReviewDate").value : $("editDate").value; // 互換
+    const newDate = $("editDate").value;
     const newMin = $("editTime").value ? Number($("editTime").value) : null;
     const newScore = $("editScore").value ? Number($("editScore").value) : null;
     const newAtt = $("editAtt").value;
@@ -402,3 +424,4 @@ async function init() {
 }
 
 window.addEventListener("load", init);
+``
