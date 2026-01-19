@@ -1,7 +1,7 @@
 
 {
-  "name": "計算進捗",
-  "short_name": "進捗",
+  "name": "復習管理",
+  "short_name": "復習",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#0b1020",
@@ -11,4 +11,3 @@
     { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
   ]
 }
-``
