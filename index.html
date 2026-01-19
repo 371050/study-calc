@@ -1,187 +1,796 @@
 
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>計算進捗ツール（Web/PWA）</title>
-  <link rel="manifest" href="./manifest.json" />
-  <link rel="stylesheet" href="./styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f766e" />
+  <title>学習進捗トラッカー</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
   <style>
-    .grid3 { display:grid; grid-template-columns: 2fr 1fr 1fr; gap:12px; }
-    @media (max-width: 1100px) { .grid3 { grid-template-columns:1fr; } }
-    .matrix { width:100%; border-collapse: collapse; font-size:13px; }
-    .matrix th, .matrix td { border-bottom:1px solid var(--line); padding:6px; white-space:nowrap; }
-    .matrix td.center { text-align:center; }
-    .pill { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:6px; border:1px solid var(--line); cursor:pointer; user-select:none; }
-    .pill:hover { background: rgba(255,255,255,0.07); }
-    .pill.-ok  { color:#56f28a; border-color:#56f28a44; }
-    .pill.-mid { color:#ffd45a; border-color:#ffd45a44; }
-    .pill.-ng  { color:#ff5a5a; border-color:#ff5a5a44; }
-    .nowrap { white-space:nowrap; }
-    .hide { display:none; }
+    :root{
+      --bg:#0b1416; --panel:#0f1a1c; --ink:#e7f5ff; --muted:#b6c2c9;
+      --accent:#0ea5a5; --accent-ink:#042f2f; --ok:#16a34a; --warn:#f59e0b; --bad:#ef4444;
+      --chip:#0b2f33; --chip-b:#0c474f;
+      --gap:12px; --radius:12px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Noto Sans JP", "Hiragino Kaku Gothic ProN", Hiragino Sans, Meiryo, "Yu Gothic UI", "Noto Sans", sans-serif;
+      -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+    }
+    header{
+      position:sticky; top:0; z-index:10; background:linear-gradient(180deg, #0f766e, #0a5a55);
+      padding:14px 16px 10px; display:flex; gap:12px; align-items:center; justify-content:space-between;
+    }
+    header .ttl{font-weight:700; letter-spacing:.02em}
+    header .ttl .sub{font-weight:500; opacity:.85; font-size:.92rem}
+    header .actions{display:flex; gap:8px}
+    button, .btn{
+      appearance:none; border:none; border-radius:10px; padding:10px 14px; color:#fff; background:#115e59;
+      font-weight:600; letter-spacing:.02em; cursor:pointer;
+    }
+    button.ghost{background:#0b2f33; border:1px solid #14505a}
+    button.primary{background:#0ea5a5; color:#062d2d}
+    button.warn{background:#7a271a}
+    button:active{transform:translateY(1px)}
+    main{padding:14px 12px 80px}
+    .section{display:none}
+    .section.active{display:block}
+    .card{
+      background:var(--panel); border:1px solid #16343a; border-radius:var(--radius); padding:14px; margin:10px 0;
+    }
+    .card h3{margin:0 0 6px; font-size:1.05rem}
+    .grid{display:grid; gap:10px}
+    .grid.cols-2{grid-template-columns:1fr 1fr}
+    @media (min-width:768px){ .grid.cols-2{grid-template-columns:1fr 1fr} }
+    label{display:block; font-size:.9rem; color:var(--muted); margin:8px 0 4px}
+    input[type="text"], input[type="number"], input[type="date"], select{
+      width:100%; padding:10px 12px; border-radius:10px; border:1px solid #23464d; background:#0d2125; color:var(--ink)
+    }
+    input::placeholder{color:#7a9097}
+    .tabs{display:flex; gap:6px; margin:6px 0 10px; overflow:auto; padding-bottom:2px}
+    .chip{
+      padding:8px 12px; border-radius:999px; border:1px solid var(--chip-b); background:var(--chip); color:#bde6e6; white-space:nowrap; cursor:pointer; font-weight:600;
+    }
+    .chip.active{background:#0ea5a5; color:#062d2d; border-color:#0ea5a5}
+    .hint{font-size:.85rem; color:var(--muted)}
+    .table-wrap{overflow:auto; border-radius:12px; border:1px solid #1a3a40}
+    table{width:100%; border-collapse:separate; border-spacing:0; min-width:680px; background:#0a1a1d}
+    th, td{border-bottom:1px solid #15353b; padding:8px 10px; text-align:left}
+    th.sticky, td.sticky{position:sticky; left:0; background:#0a1a1d; z-index:1}
+    thead th{position:sticky; top:0; z-index:2; background:#0d262a}
+    tr:hover td{background:#0b2024}
+    .mark{
+      display:inline-flex; align-items:center; justify-content:center; min-width:36px; height:36px;
+      border-radius:8px; border:1px solid #1a3a40; background:#0f1f22; font-weight:800; letter-spacing:.05em;
+    }
+    .mark.ok{color:#d1fadf; background:#052914; border-color:#0c3c20}
+    .mark.mid{color:#fef3c7; background:#2c2206; border-color:#3d2d07}
+    .mark.bad{color:#fee2e2; background:#2a0b0b; border-color:#3a0f0f}
+    .mark.tap{cursor:pointer}
+    .kicker{font-size:.85rem; color:#9bd3d3}
+    .muted{color:var(--muted)}
+    .row-actions{display:flex; gap:8px}
+    .bottom-nav{
+      position:fixed; bottom:0; left:0; right:0; background:#0d262a; border-top:1px solid #1a3a40;
+      display:flex; justify-content:space-around; padding:6px 6px calc(6px + env(safe-area-inset-bottom));
+      z-index:10;
+    }
+    .bottom-nav button{
+      flex:1; background:transparent; border:none; color:#cfeff0; padding:8px; border-radius:8px; font-weight:700
+    }
+    .bottom-nav button.active{background:#0ea5a5; color:#062d2d}
+    .row{display:flex; align-items:center; justify-content:space-between; gap:10px}
+    .list{display:flex; flex-direction:column; gap:8px}
+    .pill{display:inline-flex; padding:6px 10px; border:1px solid #14484e; background:#0b2f33; border-radius:999px; color:#bde6e6}
+    .danger{color:#fecaca}
+    dialog{
+      border:none; border-radius:16px; padding:0; width:min(92vw, 560px); background:#0b1e22; color:var(--ink);
+    }
+    dialog::backdrop{background:rgb(0 0 0 / .6)}
+    .sheet{padding:14px}
+    .sheet h3{margin:0 0 8px}
+    .sheet .row{margin-top:8px}
+    .divider{height:1px; background:#173b41; margin:12px -14px}
+    .tiny{font-size:.8rem}
   </style>
 </head>
 <body>
   <header>
-    <h1>計算進捗ツール（Web/PWA）</h1>
-
-    <!-- 教科 -->
-    <div class="row">
-      <label>教科：</label>
-      <select id="subjectSelect"></select>
-      <button id="addSubjectBtn">教科追加</button>
-      <button id="subjectUpBtn">↑</button>
-      <button id="subjectDownBtn">↓</button>
-      <div class="spacer"></div>
-      <button id="exportBtn">エクスポート(JSON)</button>
-      <label class="filebtn">
-        インポート(JSON)
-        <input id="importFile" type="file" accept="application/json" />
-      </label>
-      <button id="wipeBtn" class="danger">この端末のデータ全消去</button>
+    <div class="ttl">
+      <div>学習進捗トラッカー</div>
+      <div class="sub tiny">消費税法 / Android Chrome 最適化</div>
     </div>
-    <p class="hint">※データは端末内に保存。同期はエクスポート→共有→インポートで手動です。</p>
+    <div class="actions">
+      <button class="ghost" id="btn-export" title="JSONエクスポート">エクスポート</button>
+      <label class="btn" for="file-import">インポート</label>
+      <input id="file-import" type="file" accept="application/json" style="display:none">
+    </div>
   </header>
 
   <main>
-    <section class="card">
-      <h2>今日入力（クイック）</h2>
-      <p class="hint">
-        使い方：①種類を選ぶ → ②（問題のときのみ）単元コード（例：<code>1-1</code>） → ③番号ラベル（例：<code>問題3</code> / <code>第2回</code> / <code>3</code> / <code>2</code>）→ 日付/時間/点数/到達度 → 記録。<br />
-        ※数字や記号が全角でも自動で半角に正規化されます。
-      </p>
-      <div class="form" style="margin-bottom:8px;">
-        <label>種類
-          <select id="quickKind">
-            <option value="問題">問題</option>
-            <option value="確認テスト">確認テスト</option>
-            <option value="答練">答練</option>
-          </select>
-        </label>
-        <label id="quickUnitRow">単元コード（種類=問題のみ）
-          <input id="quickUnitCode" placeholder="1-1" />
-        </label>
-        <label>番号ラベル（問題3 / 第2回 / 3 / 2）
-          <input id="quickNumberLabel" placeholder="問題3 / 第2回 / 3 / 2" />
-        </label>
+    <!-- ダッシュボード（復習） -->
+    <section id="sec-dashboard" class="section active">
+      <div class="card">
+        <h3>今日やるべきこと</h3>
+        <div id="today-list" class="list"></div>
       </div>
-      <div class="row">
-        <label>学習日 <input id="quickDate" type="date" /></label>
-        <label>時間(分,任意) <input id="quickTime" type="number" min="0" step="1" placeholder="例: 25" /></label>
-        <label>点数(任意) <input id="quickScore" type="number" step="1" placeholder="例: 80" /></label>
-        <label class="nowrap">到達度
-          <select id="quickAtt">
-            <option value="○">○</option>
-            <option value="△" selected>△</option>
-            <option value="×">×</option>
-          </select>
-        </label>
-        <button id="recordQuickBtn">記録する</button>
-        <div id="log" class="log"></div>
+      <div class="card">
+        <h3>今後7日の予定</h3>
+        <div id="week-list" class="list"></div>
+        <div class="hint">※ 直近学習が ○ の項目は復習対象外です。△は10日後、×は5日後に表示。</div>
       </div>
     </section>
 
-    <section class="grid2">
-      <section class="card">
-        <h2>今日やるべき（期限切れ含む）</h2>
-        <table class="tbl" id="dueTable">
-          <thead>
-            <tr>
-              <th>教科</th><th>問題</th>
-              <th>最終回数</th><th>最終日</th><th>次回予定</th><th>遅延(日)</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </section>
-      <section class="card">
-        <h2>今後7日間の予定（グルーピング）</h2>
-        <table class="tbl" id="upcomingTable">
-          <thead>
-            <tr>
-              <th>予定日</th><th>教科</th><th>問題</th><th>最終回数</th><th>最終日</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </section>
-    </section>
-
-    <section class="card">
-      <h2>問題×回のマトリクス（教科別）</h2>
-      <div class="grid3">
-        <div>
-          <h3>問題一覧（行） × 回（列）</h3>
-          <table class="matrix" id="matrixTable">
-            <thead><tr id="matrixHeaderRow"><th>問題</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-
-        <div>
-          <h3>問題の追加/記録</h3>
-          <div class="form">
-            <label>種類
-              <select id="formKind">
-                <option value="問題" selected>問題</option>
-                <option value="確認テスト">確認テスト</option>
-                <option value="答練">答練</option>
-              </select>
-            </label>
-            <label id="formUnitRow">単元コード（種類=問題のみ） <input id="formUnitCode" placeholder="1-1" /></label>
-            <label>番号（問題番号 or 第N回のN）<input id="formNumber" type="number" min="1" step="1" placeholder="例: 3 or 2" /></label>
-            <label>学習日 <input id="formDate" type="date" /></label>
-            <label>時間(分,任意) <input id="formTime" type="number" min="0" step="1" /></label>
-            <label>点数(任意) <input id="formScore" type="number" step="1" /></label>
-            <label>到達度
-              <select id="formAtt">
-                <option value="○">○</option>
-                <option value="△" selected>△</option>
-                <option value="×">×</option>
-              </select>
-            </label>
-            <div class="row">
-              <button id="addOrRecordBtn">追加/記録</button>
-              <button id="deleteProblemBtn" class="danger">この問題を削除</button>
-            </div>
+    <!-- 記録追加 -->
+    <section id="sec-add" class="section">
+      <div class="card">
+        <h3>学習記録を追加</h3>
+        <div class="grid">
+          <div>
+            <label>教科</label>
+            <select id="add-subject"></select>
+          </div>
+          <div>
+            <label>問題集</label>
+            <select id="add-set"></select>
+          </div>
+          <div id="subtype-wrap" style="display:none">
+            <label>区分</label>
+            <select id="add-subtype">
+              <option value="個別">個別問題</option>
+              <option value="総合">総合問題</option>
+            </select>
+          </div>
+          <div id="itemnum-wrap">
+            <label id="itemnum-label">問題番号</label>
+            <input id="add-itemnum" type="number" inputmode="numeric" min="1" placeholder="例：1" />
+          </div>
+          <div>
+            <label>学習日</label>
+            <input id="add-date" type="date">
+          </div>
+          <div>
+            <label>かかった時間（hh:mm:ss・空欄OK）</label>
+            <input id="add-duration" type="text" placeholder="例：01:15:30">
+          </div>
+          <div>
+            <label>点数（空欄OK）</label>
+            <input id="add-score" type="number" inputmode="decimal" placeholder="例：80">
+          </div>
+          <div>
+            <label>学習到達度</label>
+            <select id="add-attain">
+              <option value="○">○（できた）</option>
+              <option value="△">△（要復習）</option>
+              <option value="×">×（できない）</option>
+            </select>
           </div>
         </div>
+        <div class="row" style="margin-top:12px">
+          <button class="primary" id="btn-save">記録を保存</button>
+          <span class="hint">※ 1-1 / 1-2 / 2-1 / 2-2 は「個別/総合」を選択してから問題番号を入力。<br>確認テスト / 答練は「第n回」の n を入力してください。</span>
+        </div>
+      </div>
+    </section>
 
-        <div>
-          <h3>学習履歴（編集/削除/再採番）</h3>
-          <table class="tbl" id="attemptsTable">
-            <thead><tr><th>ID</th><th>回数</th><th>日付</th><th>時間(分)</th><th>点</th><th>到達</th></tr></thead>
-            <tbody></tbody>
-          </table>
-          <p class="hint">選択した履歴を編集：</p>
-          <div class="form">
-            <label>回数 <input id="editNo" type="number" min="1" step="1" /></label>
-            <label>日付 <input id="editDate" type="date" /></label>
-            <label>時間(分) <input id="editTime" type="number" min="0" step="1" /></label>
-            <label>点数 <input id="editScore" type="number" step="1" /></label>
-            <label>到達度
-              <select id="editAtt">
-                <option value="○">○</option>
-                <option value="△">△</option>
-                <option value="×">×</option>
-              </select>
-            </label>
+    <!-- 一覧（表） -->
+    <section id="sec-table" class="section">
+      <div class="tabs" id="tabs-sets"></div>
+      <div id="tables-container"></div>
+      <div class="hint">各「○/△/×」をタップすると、その回の詳細（学習日・時間・点数・到達度）を表示・編集できます。</div>
+    </section>
+
+    <!-- 管理（教科・問題集・データ） -->
+    <section id="sec-manage" class="section">
+      <div class="card">
+        <h3>教科</h3>
+        <div class="grid cols-2">
+          <div>
+            <label>教科を追加</label>
             <div class="row">
-              <button id="updateAttemptBtn">更新（編集）</button>
-              <button id="deleteAttemptBtn" class="danger">選択した履歴を削除</button>
-              <button id="renumberBtn">再採番（日付順に1..n）</button>
+              <input id="new-subject-name" type="text" placeholder="例：消費税法">
+              <button id="btn-add-subject">追加</button>
             </div>
+          </div>
+          <div>
+            <label>既存の教科</label>
+            <div id="subjects-list" class="list"></div>
           </div>
         </div>
       </div>
-      <p class="hint">※PWA対応済：ホーム追加してオフラインでも利用可能（sw.js）。</p>
+
+      <div class="card">
+        <h3>問題集</h3>
+        <div class="grid cols-2">
+          <div>
+            <label>問題集を追加</label>
+            <div class="grid">
+              <select id="set-subject"></select>
+              <input id="new-set-name" type="text" placeholder="例：1-3 / 3-1 / 直前答練など">
+              <select id="new-set-kind">
+                <option value="standard">通常（問題番号制）</option>
+                <option value="session">回数制（第n回）</option>
+              </select>
+              <label><input type="checkbox" id="new-set-hasSubtypes"> 「個別/総合」を使う（1-1〜2-2 と同様）</label>
+              <button id="btn-add-set">追加</button>
+            </div>
+          </div>
+          <div>
+            <label>既存の問題集</label>
+            <div id="sets-list" class="list"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>データ</h3>
+        <div class="row">
+          <span class="hint">ローカル保存（端末内）。エクスポートJSONを Google Drive で共有 → 他端末でインポート。</span>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="btn-reset" class="warn">全データ初期化</button>
+          <span class="danger tiny">※ 取り消しできません。事前にエクスポート推奨。</span>
+        </div>
+      </div>
     </section>
   </main>
 
-  <footer><small>Web/PWA版（GitHub Pagesで配信）</small></footer>
+  <nav class="bottom-nav" role="navigation">
+    <button data-sec="sec-dashboard" class="active">復習</button>
+    <button data-sec="sec-add">記録</button>
+    <button data-sec="sec-table">一覧</button>
+    <button data-sec="sec-manage">管理</button>
+  </nav>
 
-  <script src="./db.js"></script>
-  <script src="./app.js"></script>
+  <!-- 詳細モーダル -->
+  <dialog id="dlg-detail">
+    <div class="sheet">
+      <h3 id="dlg-title">詳細</h3>
+      <div id="dlg-meta" class="kicker"></div>
+      <div class="divider"></div>
+      <div class="grid">
+        <div>
+          <label>学習日</label>
+          <input id="dlg-date" type="date">
+        </div>
+        <div>
+          <label>時間（hh:mm:ss）</label>
+          <input id="dlg-duration" type="text" placeholder="例：00:45:00">
+        </div>
+        <div>
+          <label>点数</label>
+          <input id="dlg-score" type="number" inputmode="decimal">
+        </div>
+        <div>
+          <label>到達度</label>
+          <select id="dlg-attain">
+            <option value="○">○</option>
+            <option value="△">△</option>
+            <option value="×">×</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="dlg-save" class="primary">保存</button>
+        <button id="dlg-delete" class="warn">削除</button>
+        <button id="dlg-cancel" class="ghost">閉じる</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script>
+    // ====== ユーティリティ ======
+    const $ = s => document.querySelector(s);
+    const $$ = s => document.querySelectorAll(s);
+    const todayISO = () => new Date().toISOString().slice(0,10);
+    const toISO = d => new Date(d).toISOString();
+    const pad2 = n => String(n).padStart(2,'0');
+    const parseHMS = (s) => {
+      if(!s) return null;
+      const m = String(s).trim().match(/^(\d{1,2}):([0-5]?\d):([0-5]?\d)$/);
+      if(!m) return null;
+      const [_,hh,mm,ss] = m.map(Number);
+      return hh*3600+mm*60+ss;
+    };
+    const fmtHMS = (sec) => {
+      if (sec == null) return '';
+      const h = Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60;
+      return `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
+    };
+    const cmpISODate = (a,b) => a.localeCompare(b); // YYYY-MM-DD 比較
+    const uid = (p='id') => `${p}-${Math.random().toString(36).slice(2,9)}-${Date.now().toString(36)}`;
+    const clone = (o) => JSON.parse(JSON.stringify(o));
+
+    // ====== ストレージ（localStorage）======
+    const KEY = 'study-tracker-v1';
+    const initialState = () => ({
+      version:1,
+      subjects:[
+        {id:'sub-ctax', name:'消費税法'}
+      ],
+      sets:[
+        {id:'set-1-1', subjectId:'sub-ctax', name:'1-1', kind:'standard', hasSubtypes:true},
+        {id:'set-1-2', subjectId:'sub-ctax', name:'1-2', kind:'standard', hasSubtypes:true},
+        {id:'set-2-1', subjectId:'sub-ctax', name:'2-1', kind:'standard', hasSubtypes:true},
+        {id:'set-2-2', subjectId:'sub-ctax', name:'2-2', kind:'standard', hasSubtypes:true},
+        {id:'set-kakunin', subjectId:'sub-ctax', name:'確認テスト', kind:'session', hasSubtypes:false},
+        {id:'set-touren', subjectId:'sub-ctax', name:'答練', kind:'session', hasSubtypes:false},
+      ],
+      records:[], // {id, subjectId, setId, subtype?, itemNumber, dateISO(YYYY-MM-DD), durationSec?, score?, attain, createdAt(ISO)}
+      meta:{createdAt: toISO(new Date()), updatedAt: toISO(new Date())}
+    });
+    const load = () => {
+      const raw = localStorage.getItem(KEY);
+      if(!raw){ const st = initialState(); localStorage.setItem(KEY, JSON.stringify(st)); return st; }
+      try { return JSON.parse(raw); } catch { const st = initialState(); localStorage.setItem(KEY, JSON.stringify(st)); return st; }
+    };
+    const save = (st) => { st.meta.updatedAt = toISO(new Date()); localStorage.setItem(KEY, JSON.stringify(st)); };
+
+    let state = load();
+
+    // ====== ビュー補助 ======
+    const renderSubjectSelects = () => {
+      const opts = state.subjects.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+      $('#add-subject').innerHTML = opts;
+      $('#set-subject').innerHTML = opts;
+      renderSetOptions();
+    };
+    const renderSetOptions = () => {
+      const sid = $('#add-subject').value;
+      const list = state.sets.filter(s=>s.subjectId===sid);
+      $('#add-set').innerHTML = list.map(s=>`<option value="${s.id}" data-kind="${s.kind}" data-has="${s.hasSubtypes?'1':'0'}">${s.name}</option>`).join('');
+      onSetChanged();
+    };
+    const onSetChanged = () => {
+      const sel = $('#add-set');
+      const opt = sel.options[sel.selectedIndex];
+      const kind = opt?.dataset.kind || 'standard';
+      const has = opt?.dataset.has === '1';
+      // 区分／ラベル切替
+      $('#subtype-wrap').style.display = has ? 'block':'none';
+      $('#itemnum-label').textContent = (kind==='session') ? '第n回（n）' : '問題番号';
+    };
+    const fillToday = () => $('#add-date').value = todayISO();
+
+    // ====== 記録の追加 ======
+    $('#btn-save').addEventListener('click', () => {
+      const subjectId = $('#add-subject').value;
+      const setId = $('#add-set').value;
+      const set = state.sets.find(s=>s.id===setId);
+      const subtype = (set?.hasSubtypes) ? $('#add-subtype').value : null;
+      const itemNumber = Number($('#add-itemnum').value);
+      const dateISO = $('#add-date').value;
+      const durationSec = parseHMS($('#add-duration').value.trim());
+      const score = ($('#add-score').value.trim()==='') ? null : Number($('#add-score').value);
+      const attain = $('#add-attain').value;
+
+      // バリデーション
+      if(!subjectId || !setId){ alert('教科と問題集を選択してください'); return; }
+      if(!dateISO){ alert('学習日を入力してください'); return; }
+      if(!itemNumber || itemNumber < 1 || !Number.isFinite(itemNumber)){ alert((set.kind==='session'?'第n回の n':'問題番号') + ' を正しく入力してください'); return; }
+      if($('#add-duration').value && durationSec==null){ alert('時間は hh:mm:ss 形式で入力してください（例：01:15:30）'); return; }
+
+      const rec = {
+        id: uid('rec'),
+        subjectId, setId, subtype,
+        itemNumber,
+        dateISO,
+        durationSec,
+        score,
+        attain,
+        createdAt: toISO(new Date())
+      };
+      state.records.push(rec);
+      save(state);
+      renderAll();
+      alert('保存しました');
+    });
+
+    // ====== 一覧（表） ======
+    const renderTabsAndTables = () => {
+      const subjectId = $('#add-subject').value || state.subjects[0]?.id;
+      const sets = state.sets.filter(s=>s.subjectId===subjectId);
+      // タブ
+      const tabs = $('#tabs-sets');
+      tabs.innerHTML = '';
+      sets.forEach((s,i)=>{
+        const btn = document.createElement('div');
+        btn.className = 'chip' + (i===0?' active':'');
+        btn.textContent = s.name + (s.kind==='session'?'（第n回）': s.hasSubtypes?'（個別/総合）':'');
+        btn.dataset.setId = s.id;
+        btn.addEventListener('click', ()=>{
+          $$('#tabs-sets .chip').forEach(c=>c.classList.remove('active'));
+          btn.classList.add('active');
+          renderSetTable(s.id);
+        });
+        tabs.appendChild(btn);
+      });
+      if(sets[0]) renderSetTable(sets[0].id); else $('#tables-container').innerHTML = '<div class="card">問題集がありません</div>';
+    };
+
+    const byItemKey = (r) => `${r.setId}__${r.subtype||''}__${r.itemNumber}`;
+    const groupBy = (arr, fn) => arr.reduce((m,x)=>{ const k=fn(x); (m[k]=m[k]||[]).push(x); return m; },{});
+
+    const renderSetTable = (setId) => {
+      const set = state.sets.find(s=>s.id===setId);
+      const list = state.records.filter(r=>r.setId===setId);
+      const cont = $('#tables-container');
+      cont.innerHTML = '';
+      if(!set){ cont.innerHTML='<div class="card">対象の問題集が見つかりません</div>'; return; }
+
+      const wrapCard = (inner) => `<div class="card"><div class="kicker">${set.name} ${set.kind==='session'?'（第n回）':''} ${set.hasSubtypes?'（個別/総合）':''}</div>${inner}</div>`;
+
+      if(set.hasSubtypes){
+        cont.innerHTML = wrapCard(renderTableFor(list.filter(r=>r.subtype==='個別'), '個別')) +
+                          wrapCard(renderTableFor(list.filter(r=>r.subtype==='総合'), '総合'));
+      }else{
+        cont.innerHTML = wrapCard(renderTableFor(list, set.kind==='session'?'第n回':'問題'));
+      }
+    };
+
+    const renderTableFor = (records, label) => {
+      // アイテム（問題番号 or 第n回）ごとにグループ → 日付昇順に並べ替え → 最大回数を列に
+      const byItem = groupBy(records, r=>r.itemNumber);
+      const items = Object.keys(byItem).map(n=>Number(n)).sort((a,b)=>a-b);
+      // 各アイテム内で日付昇順、同日なら createdAt 昇順
+      items.forEach(n => {
+        byItem[n].sort((a,b) => {
+          const c = cmpISODate(a.dateISO, b.dateISO);
+          return c!==0 ? c : a.createdAt.localeCompare(b.createdAt);
+        });
+      });
+      const maxCols = items.reduce((m,n)=>Math.max(m, byItem[n].length), 0);
+
+      if(items.length===0){
+        return `<div class="hint">まだ記録がありません</div>`;
+      }
+
+      let thead = `<thead><tr><th class="sticky">${label}</th>`;
+      for(let i=1;i<=maxCols;i++){ thead += `<th>${i}回目</th>`; }
+      thead += `</tr></thead>`;
+
+      let tbody = '<tbody>';
+      for(const n of items){
+        tbody += `<tr><td class="sticky">${label==='第n回' ? `第${n}回` : `問題${n}`}</td>`;
+        const row = byItem[n];
+        for(let i=0;i<maxCols;i++){
+          const rec = row[i];
+          if(!rec){ tbody += `<td class="muted">—</td>`; continue; }
+          const cls = rec.attain==='○'?'ok':(rec.attain==='△'?'mid':'bad');
+          tbody += `<td><div class="mark ${cls} tap" data-id="${rec.id}" title="タップで詳細">${rec.attain}</div></td>`;
+        }
+        tbody += `</tr>`;
+      }
+      tbody += '</tbody>';
+
+      return `<div class="table-wrap"><table>${thead}${tbody}</table></div>`;
+    };
+
+    // ====== 詳細モーダル（編集/削除） ======
+    let currentRecId = null;
+    document.addEventListener('click', (ev)=>{
+      const el = ev.target.closest('.mark.tap');
+      if(!el) return;
+      const id = el.dataset.id;
+      const rec = state.records.find(r=>r.id===id);
+      if(!rec) return;
+
+      currentRecId = id;
+      const set = state.sets.find(s=>s.id===rec.setId);
+      const subj = state.subjects.find(s=>s.id===rec.subjectId);
+      $('#dlg-title').textContent = (set?.hasSubtypes ? `${set?.name} / ${rec.subtype} / ${(set.kind==='session'?'第'+rec.itemNumber+'回':'問題'+rec.itemNumber)}` :
+                                    `${set?.name} / ${(set?.kind==='session'?'第'+rec.itemNumber+'回':'問題'+rec.itemNumber)}`);
+      $('#dlg-meta').textContent = `${subj?.name}｜ID: ${rec.id}`;
+      $('#dlg-date').value = rec.dateISO;
+      $('#dlg-duration').value = fmtHMS(rec.durationSec);
+      $('#dlg-score').value = rec.score ?? '';
+      $('#dlg-attain').value = rec.attain;
+
+      $('#dlg-detail').showModal();
+    });
+
+    $('#dlg-save').addEventListener('click', ()=>{
+      if(!currentRecId) return;
+      const rec = state.records.find(r=>r.id===currentRecId);
+      if(!rec) return;
+
+      const dateISO = $('#dlg-date').value;
+      const durationSec = parseHMS($('#dlg-duration').value.trim());
+      const score = ($('#dlg-score').value.trim()==='') ? null : Number($('#dlg-score').value);
+      const attain = $('#dlg-attain').value;
+      if(!dateISO){ alert('学習日が未入力です'); return; }
+      if($('#dlg-duration').value && durationSec==null){ alert('時間は hh:mm:ss 形式で入力してください'); return; }
+
+      rec.dateISO = dateISO;
+      rec.durationSec = durationSec;
+      rec.score = score;
+      rec.attain = attain;
+      // 連番は “日付昇順” になるよう、表示側で都度並べ直す（保存データは回数を保持しない）
+      save(state);
+      renderAll();
+      $('#dlg-detail').close();
+    });
+
+    $('#dlg-delete').addEventListener('click', ()=>{
+      if(!currentRecId) return;
+      if(!confirm('この記録を削除します。よろしいですか？')) return;
+      state.records = state.records.filter(r=>r.id!==currentRecId);
+      save(state);
+      renderAll();
+      $('#dlg-detail').close();
+    });
+    $('#dlg-cancel').addEventListener('click', ()=>$('#dlg-detail').close());
+
+    // ====== 復習リスト ======
+    const addDays = (iso, n) => {
+      const d = new Date(iso+'T00:00:00');
+      d.setDate(d.getDate()+n);
+      return d.toISOString().slice(0,10);
+    };
+    const renderReview = () => {
+      // 各アイテム（setId+subtype+itemNumber）で最終記録を拾う
+      const byKey = groupBy(state.records, r=>byItemKey(r));
+      const latest = [];
+      for(const k in byKey){
+        const arr = byKey[k];
+        arr.sort((a,b)=> {
+          const c = cmpISODate(a.dateISO,b.dateISO);
+          return c!==0 ? c : a.createdAt.localeCompare(b.createdAt);
+        });
+        latest.push(arr[arr.length-1]);
+      }
+      const today = todayISO();
+      const in7end = addDays(today, 7);
+
+      const todayItems = [];
+      const weekItems = [];
+
+      for(const rec of latest){
+        const d = rec.dateISO;
+        let due = null;
+        if(rec.attain==='○'){ continue; }
+        if(rec.attain==='△'){ due = addDays(d, 10); }
+        if(rec.attain==='×'){ due = addDays(d, 5); }
+        if(!due) continue;
+
+        const set = state.sets.find(s=>s.id===rec.setId);
+        const subj = state.subjects.find(s=>s.id===rec.subjectId);
+        const label = set?.hasSubtypes
+          ? `${subj?.name} / ${set?.name} / ${rec.subtype} / ${(set?.kind==='session'?'第'+rec.itemNumber+'回':'問題'+rec.itemNumber)}`
+          : `${subj?.name} / ${set?.name} / ${(set?.kind==='session'?'第'+rec.itemNumber+'回':'問題'+rec.itemNumber)}`;
+
+        const row = {
+          label,
+          due,
+          last: rec.dateISO,
+          status: rec.attain,
+          setId: rec.setId,
+          subtype: rec.subtype,
+          itemNumber: rec.itemNumber
+        };
+
+        if(due===today) todayItems.push(row);
+        else if (due>today && due<=in7end) weekItems.push(row);
+      }
+
+      todayItems.sort((a,b)=>a.label.localeCompare(b.label,'ja'));
+      weekItems.sort((a,b)=>a.due.localeCompare(b.due)||a.label.localeCompare(b.label,'ja'));
+
+      const mkRow = (x) => {
+        const cls = x.status==='○'?'ok':(x.status==='△'?'mid':'bad');
+        return `<div class="row card">
+          <div>
+            <div><span class="pill">予定日 ${x.due}</span></div>
+            <div style="margin-top:6px">${x.label}</div>
+            <div class="tiny muted">直近の到達度：<b>${x.status}</b>｜最終学習日：${x.last}</div>
+          </div>
+          <div class="row-actions">
+            <button class="ghost" data-quick-add='${JSON.stringify(x)}'>記録する</button>
+          </div>
+        </div>`;
+      };
+
+      const todayEl = $('#today-list');
+      const weekEl = $('#week-list');
+      todayEl.innerHTML = todayItems.length ? todayItems.map(mkRow).join('') : '<div class="muted">本日はありません</div>';
+      weekEl.innerHTML = weekItems.length ? weekItems.map(mkRow).join('') : '<div class="muted">直近7日にはありません</div>';
+
+      // クイック追加（今日の日付・到達度は未選択）
+      document.querySelectorAll('[data-quick-add]').forEach(btn=>{
+        btn.addEventListener('click', ()=>{
+          const x = JSON.parse(btn.dataset.quickAdd);
+          // 記録タブに遷移し、対象をプリセット
+          switchSection('sec-add');
+          $('#add-subject').value = state.sets.find(s=>s.id===x.setId)?.subjectId;
+          renderSetOptions();
+          $('#add-set').value = x.setId;
+          onSetChanged();
+          if(x.subtype){ $('#add-subtype').value = x.subtype; }
+          $('#add-itemnum').value = x.itemNumber;
+          $('#add-date').value = todayISO();
+          $('#add-duration').value = '';
+          $('#add-score').value = '';
+          $('#add-attain').value = '△';
+        });
+      });
+    };
+
+    // ====== 管理：教科・問題集 ======
+    const renderManageLists = () => {
+      // 教科
+      $('#subjects-list').innerHTML = state.subjects.map(s=>{
+        return `<div class="row card">
+          <div>${s.name} <span class="tiny muted">ID: ${s.id}</span></div>
+          <div class="row-actions">
+            <button class="ghost" data-edit-subject="${s.id}">編集</button>
+            <button class="warn" data-del-subject="${s.id}">削除</button>
+          </div>
+        </div>`;
+      }).join('') || '<div class="muted">教科がありません</div>';
+
+      // 問題集
+      const bySub = groupBy(state.sets, s=>s.subjectId);
+      const html = [];
+      for(const sid in bySub){
+        const subj = state.subjects.find(s=>s.id===sid);
+        html.push(`<div class="kicker">${subj?.name||sid}</div>`);
+        bySub[sid].forEach(set=>{
+          html.push(`<div class="row card">
+            <div>
+              <div>${set.name} <span class="pill">${set.kind==='session'?'第n回':'問題番号'}</span> ${set.hasSubtypes?'<span class="pill">個別/総合</span>':''}</div>
+              <div class="tiny muted">ID: ${set.id}</div>
+            </div>
+            <div class="row-actions">
+              <button class="ghost" data-edit-set="${set.id}">編集</button>
+              <button class="warn" data-del-set="${set.id}">削除</button>
+            </div>
+          </div>`);
+        });
+      }
+      $('#sets-list').innerHTML = html.join('') || '<div class="muted">問題集がありません</div>';
+
+      // 編集/削除 ハンドラ
+      document.querySelectorAll('[data-del-subject]').forEach(b=>{
+        b.onclick = ()=>{
+          const id = b.dataset.delSubject;
+          if(!confirm('この教科を削除します。関連する問題集と記録もすべて削除されます。よろしいですか？')) return;
+          const sets = state.sets.filter(s=>s.subjectId===id).map(s=>s.id);
+          state.records = state.records.filter(r=>r.subjectId!==id);
+          state.sets = state.sets.filter(s=>s.subjectId!==id);
+          state.subjects = state.subjects.filter(s=>s.id!==id);
+          save(state); renderAll();
+        };
+      });
+      document.querySelectorAll('[data-edit-subject]').forEach(b=>{
+        b.onclick = ()=>{
+          const id=b.dataset.editSubject;
+          const s = state.subjects.find(x=>x.id===id);
+          const name = prompt('教科名を編集', s?.name);
+          if(!name) return;
+          s.name = name;
+          save(state); renderAll();
+        };
+      });
+      document.querySelectorAll('[data-del-set]').forEach(b=>{
+        b.onclick = ()=>{
+          const id=b.dataset.delSet;
+          if(!confirm('この問題集を削除します。関連する記録もすべて削除されます。よろしいですか？')) return;
+          state.records = state.records.filter(r=>r.setId!==id);
+          state.sets = state.sets.filter(s=>s.id!==id);
+          save(state); renderAll();
+        };
+      });
+      document.querySelectorAll('[data-edit-set]').forEach(b=>{
+        b.onclick = ()=>{
+          const id=b.dataset.editSet;
+          const set = state.sets.find(x=>x.id===id);
+          const name = prompt('問題集名を編集', set?.name);
+          if(!name) return;
+          set.name = name;
+          save(state); renderAll();
+        };
+      });
+    };
+
+    $('#btn-add-subject').addEventListener('click', ()=>{
+      const name = $('#new-subject-name').value.trim();
+      if(!name) return alert('教科名を入力してください');
+      state.subjects.push({id: uid('sub'), name});
+      $('#new-subject-name').value='';
+      save(state); renderAll();
+    });
+
+    $('#btn-add-set').addEventListener('click', ()=>{
+      const subjectId = $('#set-subject').value;
+      const name = $('#new-set-name').value.trim();
+      const kind = $('#new-set-kind').value;
+      const hasSubtypes = $('#new-set-hasSubtypes').checked;
+      if(!subjectId || !name) return alert('教科と問題集名を入力してください');
+      state.sets.push({id: uid('set'), subjectId, name, kind, hasSubtypes});
+      $('#new-set-name').value=''; $('#new-set-hasSubtypes').checked=false;
+      save(state); renderAll();
+    });
+
+    // ====== エクスポート / インポート / 初期化 ======
+    $('#btn-export').addEventListener('click', ()=>{
+      const blob = new Blob([JSON.stringify(state, null, 2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().replace(/[:.]/g,'-');
+      a.href=url; a.download=`study-tracker-${ts}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+    $('#file-import').addEventListener('change', async (ev)=>{
+      const file = ev.target.files[0];
+      if(!file) return;
+      const text = await file.text();
+      try{
+        const incoming = JSON.parse(text);
+        if(!incoming.version || !Array.isArray(incoming.subjects)) throw new Error('形式不正');
+        const mode = confirm('OK: 置き換え（完全に入れ替え） / キャンセル: マージ（ID重複は上書き）') ? 'replace':'merge';
+
+        if(mode==='replace'){
+          state = incoming;
+        }else{
+          // マージ：subjects/sets/records を ID ベースで併合
+          const mergeById = (cur, add) => {
+            const map = new Map(cur.map(x=>[x.id,x]));
+            add.forEach(x=>map.set(x.id, x)); // 上書き
+            return Array.from(map.values());
+          };
+          state.subjects = mergeById(state.subjects, incoming.subjects||[]);
+          state.sets     = mergeById(state.sets, incoming.sets||[]);
+          state.records  = mergeById(state.records, incoming.records||[]);
+          state.version  = incoming.version || state.version;
+        }
+        save(state); renderAll();
+        alert('インポートしました');
+      }catch(e){
+        alert('インポート失敗：JSON 形式が不正です');
+      }finally{
+        ev.target.value='';
+      }
+    });
+    $('#btn-reset').addEventListener('click', ()=>{
+      if(!confirm('全データを初期化します。よろしいですか？（元に戻せません）')) return;
+      state = initialState();
+      save(state); renderAll();
+    });
+
+    // ====== ボトムナビ ======
+    const switchSection = (id) => {
+      $$('.section').forEach(s=>s.classList.remove('active'));
+      $('#'+id).classList.add('active');
+      $$('.bottom-nav button').forEach(b=>b.classList.toggle('active', b.dataset.sec===id));
+      if(id==='sec-table') renderTabsAndTables();
+      if(id==='sec-dashboard') renderReview();
+    };
+    $$('.bottom-nav button').forEach(b=>b.addEventListener('click', ()=>switchSection(b.dataset.sec)));
+
+    // ====== 初期レンダリング ======
+    const renderAll = () => {
+      renderSubjectSelects();
+      renderReview();
+      renderTabsAndTables();
+      renderManageLists();
+      fillToday();
+    };
+    $('#add-subject').addEventListener('change', renderSetOptions);
+    $('#add-set').addEventListener('change', onSetChanged);
+
+    // PWA: サービスワーカー登録
+    if('serviceWorker' in navigator){
+      window.addEventListener('load', ()=>{
+        navigator.serviceWorker.register('./sw.js').catch(console.warn);
+      });
+    }
+
+    // 起動！
+    renderAll();
+  </script>
 </body>
 </html>
