@@ -1,0 +1,168 @@
+
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>計算進捗ツール（Web/PWA）</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="stylesheet" href="./styles.css" />
+  <style>
+    .grid3 { display:grid; grid-template-columns: 2fr 1fr 1fr; gap:12px; }
+    @media (max-width: 1100px) { .grid3 { grid-template-columns:1fr; } }
+    .matrix { width:100%; border-collapse: collapse; font-size:13px; }
+    .matrix th, .matrix td { border-bottom:1px solid var(--line); padding:6px; white-space:nowrap; }
+    .matrix td.center { text-align:center; }
+    .pill { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:6px; border:1px solid var(--line); cursor:pointer; user-select:none; }
+    .pill:hover { background: rgba(255,255,255,0.07); }
+    .pill.-ok { color:#56f28a; border-color:#56f28a44; }
+    .pill.-mid { color:#ffd45a; border-color:#ffd45a44; }
+    .pill.-ng { color:#ff5a5a; border-color:#ff5a5a44; }
+    .muted { color: var(--muted); }
+    .nowrap { white-space:nowrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>計算進捗ツール（Web/PWA）</h1>
+    <div class="row">
+      <label>シリーズ（問題集番号 or 第n回）：</label>
+      <select id="seriesSelect"></select>
+      <button id="addSeriesBtn">シリーズ追加</button>
+      <button id="seriesUpBtn">↑</button>
+      <button id="seriesDownBtn">↓</button>
+      <div class="spacer"></div>
+      <button id="exportBtn">エクスポート(JSON)</button>
+      <label class="filebtn">
+        インポート(JSON)
+        <input id="importFile" type="file" accept="application/json" />
+      </label>
+      <button id="wipeBtn" class="danger">この端末のデータ全消去</button>
+    </div>
+    <p class="hint">※データは端末内に保存（暗記ツールと独立）。同期はエクスポート→共有→インポートで手動です。</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>今日入力（クイック）</h2>
+      <p class="hint">
+        入力例：<code>1-1 問題3</code>、<code>1-1 総合1</code>、<code>第2回 答練</code><br />
+        ※複数は空白・改行・読点（、）区切りOK
+      </p>
+      <textarea id="quickInput" rows="2" placeholder="1-1 問題3 1-1 総合1 第2回 答練"></textarea>
+      <div class="row">
+        <label>学習日 <input id="quickDate" type="date" /></label>
+        <label>時間(分,任意) <input id="quickTime" type="number" min="0" step="1" placeholder="例: 25" /></label>
+        <label>点数(任意) <input id="quickScore" type="number" step="1" placeholder="例: 80" /></label>
+        <label class="nowrap">到達度
+          <select id="quickAtt">
+            <option value="○">○</option>
+            <option value="△">△</option>
+            <option value="×">×</option>
+          </select>
+        </label>
+        <button id="recordQuickBtn">記録する</button>
+        <div id="log" class="log"></div>
+      </div>
+    </section>
+
+    <section class="grid2">
+      <section class="card">
+        <h2>今日やるべき（期限切れ含む）</h2>
+        <table class="tbl" id="dueTable">
+          <thead>
+            <tr>
+              <th>シリーズ</th><th>問題</th><th>最終回数</th><th>最終日</th><th>次回予定</th><th>遅延(日)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+      <section class="card">
+        <h2>今後7日間の予定（グルーピング）</h2>
+        <table class="tbl" id="upcomingTable">
+          <thead>
+            <tr>
+              <th>予定日</th><th>シリーズ</th><th>問題</th><th>最終回数</th><th>最終日</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </section>
+
+    <section class="card">
+      <h2>問題×回のマトリクス（シリーズ別）</h2>
+      <div class="grid3">
+        <div>
+          <h3>問題一覧（行） × 回（列）</h3>
+          <table class="matrix" id="matrixTable">
+            <thead><tr id="matrixHeaderRow"><th>問題</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div>
+          <h3>問題の追加/記録</h3>
+          <div class="form">
+            <label>シリーズ <input id="formSeries" placeholder="1-1 または 第2回" /></label>
+            <label>種別
+              <select id="formKind">
+                <option value="問題">問題</option>
+                <option value="総合">総合</option>
+                <option value="答練">答練</option>
+              </select>
+            </label>
+            <label>問題番号（答練は空） <input id="formNumber" type="number" min="1" step="1" placeholder="例: 3" /></label>
+            <label>学習日 <input id="formDate" type="date" /></label>
+            <label>時間(分,任意) <input id="formTime" type="number" min="0" step="1" /></label>
+            <label>点数(任意) <input id="formScore" type="number" step="1" /></label>
+            <label>到達度
+              <select id="formAtt">
+                <option value="○">○</option>
+                <option value="△">△</option>
+                <option value="×">×</option>
+              </select>
+            </label>
+            <div class="row">
+              <button id="addOrRecordBtn">追加/記録</button>
+              <button id="deleteProblemBtn" class="danger">この問題を削除</button>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3>学習履歴（編集/削除/再採番）</h3>
+          <table class="tbl" id="attemptsTable">
+            <thead><tr><th>ID</th><th>回数</th><th>日付</th><th>時間(分)</th><th>点</th><th>到達</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p class="hint">選択した履歴を編集：</p>
+          <div class="form">
+            <label>回数 <input id="editNo" type="number" min="1" step="1" /></label>
+            <label>日付 <input id="editDate" type="date" /></label>
+            <label>時間(分) <input id="editTime" type="number" min="0" step="1" /></label>
+            <label>点数 <input id="editScore" type="number" step="1" /></label>
+            <label>到達度
+              <select id="editAtt">
+                <option value="○">○</option>
+                <option value="△">△</option>
+                <option value="×">×</option>
+              </select>
+            </label>
+            <div class="row">
+              <button id="updateAttemptBtn">更新（編集）</button>
+              <button id="deleteAttemptBtn" class="danger">選択した履歴を削除</button>
+              <button id="renumberBtn">再採番（日付順に1..n）</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="hint">※PWA対応済：ホーム追加してオフラインでも利用可能（sw.js）。</p>
+    </section>
+  </main>
+
+  <footer><small>Web/PWA版（GitHub Pagesで配信）</small></footer>
+
+  <script src="./db.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
