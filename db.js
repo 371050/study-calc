@@ -29,7 +29,7 @@ function openDb() {
 
       // problems（フラット）
       // kind: "問題" | "確認テスト" | "答練"
-      // unitCode: string|null（問題のみ "1-1" 等）
+      // unitCode: string  …「問題」以外は ""（空文字）を使用（nullは使わない）
       // number: 整数（問題番号 or 第N回のN）
       const problems = db.createObjectStore("problems", { keyPath: "id", autoIncrement: true });
       problems.createIndex("by_subject", "subjectId");
@@ -95,21 +95,49 @@ async function moveSubject(db, subjectId, direction) {
 }
 
 /* ---------- Problems（フラット） ---------- */
-async function getOrCreateProblem(db, subjectId, kind, unitCode /*nullable*/, number) {
+/**
+ * 非「問題」の unitCode は常に ""（空文字）として保存・検索する。
+ * 互換のため、過去に unitCode=null で保存されたレコードも検索して見つけたら即時に "" へ正規化して保存し直す。
+ */
+async function getOrCreateProblem(db, subjectId, kind, unitCode /* string（非「問題」は ""） */, number) {
   const { t, stores } = tx(db, ["problems"], "readwrite");
   const idx = stores.problems.index("by_subject_kind_unit_no");
-  const req = idx.get([subjectId, kind, unitCode ?? null, number]);
+
+  const safeUnit = (unitCode == null) ? "" : String(unitCode);
+  const keyMain = [subjectId, kind, safeUnit, number];
+  const keyNull = [subjectId, kind, null, number]; // 互換検索（旧データ対策）
+
+  function idxGet(key) {
+    return new Promise((resolve, reject) => {
+      const req = idx.get(key);
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => resolve(req.result || null);
+    });
+  }
+
+  // 1) 空文字で検索
+  const foundMain = await idxGet(keyMain);
+  if (foundMain) return foundMain.id;
+
+  // 2) 旧データ（null）で検索→見つかれば空文字に正規化して保存し直し
+  const foundNull = await idxGet(keyNull);
+  if (foundNull) {
+    foundNull.unitCode = "";
+    stores.problems.put(foundNull);
+    await new Promise((res, rej) => { t.oncomplete = () => res(); t.onerror = () => rej(t.error); });
+    return foundNull.id;
+  }
+
+  // 3) 新規作成（unitCode は空文字で統一）
+  const addReq = stores.problems.add({
+    subjectId, kind, unitCode: safeUnit, number, createdAt: new Date().toISOString()
+  });
   return new Promise((resolve, reject) => {
-    req.onerror = () => reject(req.error);
-    req.onsuccess = () => {
-      const found = req.result;
-      if (found) return resolve(found.id);
-      const addReq = stores.problems.add({ subjectId, kind, unitCode: unitCode ?? null, number, createdAt: new Date().toISOString() });
-      addReq.onerror = () => reject(addReq.error);
-      addReq.onsuccess = () => resolve(addReq.result);
-    };
+    addReq.onerror = () => reject(addReq.error);
+    addReq.onsuccess = () => resolve(addReq.result);
   });
 }
+
 async function listProblemsBySubject(db, subjectId) {
   return new Promise((resolve, reject) => {
     const { stores } = tx(db, ["problems"]);
@@ -242,9 +270,18 @@ async function importJsonOverwrite(db, data) {
   }
   const { t, stores } = tx(db, ["attempts","problems","subjects"], "readwrite");
   stores.attempts.clear(); stores.problems.clear(); stores.subjects.clear();
+
+  // subjects
   data.subjects.forEach(s => stores.subjects.put(s));
-  data.problems.forEach(p => stores.problems.put(p));
+
+  // problems … unitCode を必ず文字列に正規化（null→""）
+  data.problems.forEach(p => {
+    if (p.unitCode == null) p.unitCode = "";
+    stores.problems.put(p);
+  });
+
+  // attempts
   data.attempts.forEach(a => stores.attempts.put(a));
+
   return new Promise((resolve, reject) => { t.oncomplete = () => resolve(); t.onerror = () => reject(t.error); });
 }
-``
