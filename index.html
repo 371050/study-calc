@@ -19,6 +19,12 @@
       --accent:#0ea5a5; --accent-ink:#042f2f; --ok:#16a34a; --warn:#f59e0b; --bad:#ef4444;
       --chip:#0b2f33; --chip-b:#0c474f;
       --gap:12px; --radius:12px;
+
+      /* ★ コンパクト表のキー変数 */
+      --try-col: 40px;      /* 1回目/2回目… 列の幅（必要に応じて 36〜44px 程度に調整） */
+      --mark-size: 28px;    /* ○/△/× マークの大きさ */
+      --cell-px: 6px;       /* セル内の左右パディング（ヘッダ/ボディ共通） */
+      --sticky-min: 72px;   /* 左側「問n / 第n」列の最小幅 */
     }
     *{box-sizing:border-box}
     body{
@@ -62,14 +68,27 @@
     .chip.active{background:#0ea5a5; color:#062d2d; border-color:#0ea5a5}
     .hint{font-size:.85rem; color:var(--muted)}
     .table-wrap{overflow:auto; border-radius:12px; border:1px solid #1a3a40}
-    table{width:100%; border-collapse:separate; border-spacing:0; min-width:680px; background:#0a1a1d}
-    th, td{border-bottom:1px solid #15353b; padding:8px 10px; text-align:left}
-    th.sticky, td.sticky{position:sticky; left:0; background:#0a1a1d; z-index:1}
+    table{
+      width:100%;
+      border-collapse:separate; border-spacing:0;
+      /* ★ 間延び対策：最小幅制約を撤廃し、固定レイアウト＋列幅指定でコンパクトに */
+      min-width:0; table-layout:fixed; background:#0a1a1d
+    }
+    th, td{border-bottom:1px solid #15353b; padding:4px var(--cell-px); text-align:left}
+    th.sticky, td.sticky{
+      position:sticky; left:0; background:#0a1a1d; z-index:1;
+      min-width:var(--sticky-min); max-width:calc(var(--sticky-min) + 16px);
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
     thead th{position:sticky; top:0; z-index:2; background:#0d262a}
     tr:hover td{background:#0b2024}
+    /* ★ 到達度セルを小型化、列幅を固定 */
+    th.col-try, td.col-try{ width:var(--try-col); text-align:center }
     .mark{
-      display:inline-flex; align-items:center; justify-content:center; min-width:36px; height:36px;
-      border-radius:8px; border:1px solid #1a3a40; background:#0f1f22; font-weight:800; letter-spacing:.05em;
+      display:inline-flex; align-items:center; justify-content:center;
+      min-width:var(--mark-size); width:var(--mark-size); height:var(--mark-size);
+      border-radius:6px; border:1px solid #1a3a40; background:#0f1f22; font-weight:800; letter-spacing:.02em;
+      font-size:0.95rem;
     }
     .mark.ok{color:#d1fadf; background:#052914; border-color:#0c3c20}
     .mark.mid{color:#fef3c7; background:#2c2206; border-color:#3d2d07}
@@ -533,19 +552,21 @@
         return `<div class="hint">該当する記録がありません</div>`;
       }
 
+      // ★ ヘッダを「1 / 2 / 3」だけにする（ツールチップで「1回目」を付与）
       let thead = `<thead><tr><th class="sticky">${label}</th>`;
-      for(let i=1;i<=maxCols;i++){ thead += `<th>${i}回目</th>`; }
+      for(let i=1;i<=maxCols;i++){ thead += `<th class="col-try" title="${i}回目">${i}</th>`; }
       thead += `</tr></thead>`;
 
       let tbody = '<tbody>';
       for(const n of items){
-        tbody += `<tr><td class="sticky">${label==='第n回' ? `第${n}回` : `問題${n}`}</td>`;
+        const rowLabel = (label==='第n回') ? `第${n}` : `問${n}`; // ★ 「第n回」→「第n」、「問題n」→「問n」
+        tbody += `<tr><td class="sticky" title="${rowLabel}">${rowLabel}</td>`;
         const row = byItem[n];
         for(let i=0;i<maxCols;i++){
           const rec = row[i];
-          if(!rec){ tbody += `<td class="muted">—</td>`; continue; }
+          if(!rec){ tbody += `<td class="col-try muted">—</td>`; continue; }
           const cls = rec.attain==='○'?'ok':(rec.attain==='△'?'mid':'bad');
-          tbody += `<td><div class="mark ${cls} tap" data-id="${rec.id}" title="タップで詳細">${rec.attain}</div></td>`;
+          tbody += `<td class="col-try"><div class="mark ${cls} tap" data-id="${rec.id}" title="タップで詳細">${rec.attain}</div></td>`;
         }
         tbody += `</tr>`;
       }
@@ -566,8 +587,9 @@
       currentRecId = id;
       const set = state.sets.find(s=>s.id===rec.setId);
       const subj = state.subjects.find(s=>s.id===rec.subjectId);
-      $('#dlg-title').textContent = (set?.hasSubtypes ? `${set?.name} / ${rec.subtype} / ${(set.kind==='session'?'第'+rec.itemNumber+'回':'問題'+rec.itemNumber)}` :
-                                    `${set?.name} / ${(set?.kind==='session'?'第'+rec.itemNumber+'回':'問題'+rec.itemNumber)}`);
+      const shortLabel = (set?.kind==='session' ? `第${rec.itemNumber}` : `問${rec.itemNumber}`);
+      $('#dlg-title').textContent = (set?.hasSubtypes ? `${set?.name} / ${rec.subtype} / ${shortLabel}` :
+                                    `${set?.name} / ${shortLabel}`);
       $('#dlg-meta').textContent = `${subj?.name}｜ID: ${rec.id}`;
       $('#dlg-date').value = rec.dateISO;
       $('#dlg-duration').value = fmtHMS(rec.durationSec);
@@ -642,9 +664,10 @@
 
         const set = state.sets.find(s=>s.id===rec.setId);
         const subj = state.subjects.find(s=>s.id===rec.subjectId);
+        const shortLabel = (set?.kind==='session' ? `第${rec.itemNumber}` : `問${rec.itemNumber}`);
         const label = set?.hasSubtypes
-          ? `${subj?.name} / ${set?.name} / ${rec.subtype} / ${(set?.kind==='session'?'第'+rec.itemNumber+'回':'問題'+rec.itemNumber)}`
-          : `${subj?.name} / ${set?.name} / ${(set?.kind==='session'?'第'+rec.itemNumber+'回':'問題'+rec.itemNumber)}`;
+          ? `${subj?.name} / ${set?.name} / ${rec.subtype} / ${shortLabel}`
+          : `${subj?.name} / ${set?.name} / ${shortLabel}`;
 
         const row = {
           label,
@@ -664,7 +687,6 @@
       weekItems.sort((a,b)=>a.due.localeCompare(b.due)||a.label.localeCompare(b.label,'ja'));
 
       const mkRow = (x) => {
-        const cls = x.status==='○'?'ok':(x.status==='△'?'mid':'bad');
         return `<div class="row card">
           <div>
             <div><span class="pill">予定日 ${x.due}</span></div>
@@ -876,4 +898,3 @@
   </script>
 </body>
 </html>
-``
