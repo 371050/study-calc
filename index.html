@@ -6,8 +6,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0f766e" />
   <title>学習進捗トラッカー</title>
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" sizes="192x192" href="./icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+
   <style>
     :root{
       --bg:#0b1416; --panel:#0f1a1c; --ink:#e7f5ff; --muted:#b6c2c9;
@@ -72,7 +77,10 @@
     .mark.tap{cursor:pointer}
     .kicker{font-size:.85rem; color:#9bd3d3}
     .muted{color:var(--muted)}
-    .row-actions{display:flex; gap:8px}
+    .row{display:flex; align-items:center; justify-content:space-between; gap:10px}
+    .list{display:flex; flex-direction:column; gap:8px}
+    .pill{display:inline-flex; padding:6px 10px; border:1px solid #14484e; background:#0b2f33; border-radius:999px; color:#bde6e6}
+    .danger{color:#fecaca}
     .bottom-nav{
       position:fixed; bottom:0; left:0; right:0; background:#0d262a; border-top:1px solid #1a3a40;
       display:flex; justify-content:space-around; padding:6px 6px calc(6px + env(safe-area-inset-bottom));
@@ -82,10 +90,6 @@
       flex:1; background:transparent; border:none; color:#cfeff0; padding:8px; border-radius:8px; font-weight:700
     }
     .bottom-nav button.active{background:#0ea5a5; color:#062d2d}
-    .row{display:flex; align-items:center; justify-content:space-between; gap:10px}
-    .list{display:flex; flex-direction:column; gap:8px}
-    .pill{display:inline-flex; padding:6px 10px; border:1px solid #14484e; background:#0b2f33; border-radius:999px; color:#bde6e6}
-    .danger{color:#fecaca}
     dialog{
       border:none; border-radius:16px; padding:0; width:min(92vw, 560px); background:#0b1e22; color:var(--ink);
     }
@@ -179,6 +183,13 @@
     <!-- 一覧（表） -->
     <section id="sec-table" class="section">
       <div class="tabs" id="tabs-sets"></div>
+
+      <!-- 最終到達度フィルタ -->
+      <div class="row" id="filter-bar" style="margin:6px 0 8px; gap:8px; align-items:center">
+        <span class="hint">最終到達度で絞り込み:</span>
+        <div class="tabs" id="filter-chips"></div>
+      </div>
+
       <div id="tables-container"></div>
       <div class="hint">各「○/△/×」をタップすると、その回の詳細（学習日・時間・点数・到達度）を表示・編集できます。</div>
     </section>
@@ -349,7 +360,6 @@
       const opt = sel.options[sel.selectedIndex];
       const kind = opt?.dataset.kind || 'standard';
       const has = opt?.dataset.has === '1';
-      // 区分／ラベル切替
       $('#subtype-wrap').style.display = has ? 'block':'none';
       $('#itemnum-label').textContent = (kind==='session') ? '第n回（n）' : '問題番号';
     };
@@ -390,29 +400,94 @@
     });
 
     // ====== 一覧（表） ======
+    const byItemKey = (r) => `${r.setId}__${r.subtype||''}__${r.itemNumber}`;
+    const groupBy = (arr, fn) => arr.reduce((m,x)=>{ const k=typeof fn==='function'?fn(x):x[fn]; (m[k]=m[k]||[]).push(x); return m; },{});
+
+    // === 最終到達度フィルタ ===
+    let filterLatest = null;     // null | '○' | '△' | '×'
+    let currentSetId = null;     // 現在のタブ
+
+    const latestByGroup = (arr) => {
+      arr.sort((a,b)=>{
+        const c = cmpISODate(a.dateISO, b.dateISO);
+        return c!==0 ? c : a.createdAt.localeCompare(b.createdAt);
+      });
+      return arr[arr.length-1];
+    };
+
+    const computeLatestCountsForSet = (setId) => {
+      const set = state.sets.find(s=>s.id===setId);
+      const list = state.records.filter(r=>r.setId===setId);
+      const keyFn = (r)=> (set?.hasSubtypes ? (r.subtype||'')+'__' : '') + r.itemNumber;
+      const by = groupBy(list, keyFn);
+      const counts = { all:0, '○':0, '△':0, '×':0 };
+      for(const k in by){
+        counts.all++;
+        const last = latestByGroup(by[k]);
+        if(counts[last.attain] != null) counts[last.attain]++;
+      }
+      return counts;
+    };
+
+    const renderFilterBar = (setId) => {
+      const c = computeLatestCountsForSet(setId);
+      const wrap = document.getElementById('filter-chips');
+      if(!wrap) return;
+
+      const mk = (label, val, active, qty) =>
+        `<span class="chip ${active?'active':''}" data-attain="${val??''}">${label}${qty!=null?`（${qty}）`:''}</span>`;
+      wrap.innerHTML = [
+        mk('すべて', null, filterLatest==null, c.all),
+        mk('○', '○', filterLatest==='○', c['○']),
+        mk('△', '△', filterLatest==='△', c['△']),
+        mk('×', '×', filterLatest==='×', c['×']),
+      ].join('');
+
+      wrap.querySelectorAll('.chip').forEach(ch=>{
+        ch.addEventListener('click', ()=>{
+          const v = ch.dataset.attain || null;
+          filterLatest = v;
+          renderFilterBar(setId);
+          renderSetTable(setId);
+        });
+      });
+    };
+
     const renderTabsAndTables = () => {
       const subjectId = $('#add-subject').value || state.subjects[0]?.id;
       const sets = state.sets.filter(s=>s.subjectId===subjectId);
+
       // タブ
       const tabs = $('#tabs-sets');
       tabs.innerHTML = '';
       sets.forEach((s,i)=>{
         const btn = document.createElement('div');
-        btn.className = 'chip' + (i===0?' active':'');
+        btn.className = 'chip' + ((currentSetId ? currentSetId===s.id : i===0) ? ' active':'');
         btn.textContent = s.name + (s.kind==='session'?'（第n回）': s.hasSubtypes?'（個別/総合）':'');
         btn.dataset.setId = s.id;
         btn.addEventListener('click', ()=>{
           $$('#tabs-sets .chip').forEach(c=>c.classList.remove('active'));
           btn.classList.add('active');
-          renderSetTable(s.id);
+          currentSetId = s.id;
+          renderFilterBar(currentSetId);
+          renderSetTable(currentSetId);
         });
         tabs.appendChild(btn);
       });
-      if(sets[0]) renderSetTable(sets[0].id); else $('#tables-container').innerHTML = '<div class="card">問題集がありません</div>';
-    };
 
-    const byItemKey = (r) => `${r.setId}__${r.subtype||''}__${r.itemNumber}`;
-    const groupBy = (arr, fn) => arr.reduce((m,x)=>{ const k=fn(x); (m[k]=m[k]||[]).push(x); return m; },{});
+      // 初期表示
+      if(!currentSetId || !sets.some(s=>s.id===currentSetId)){
+        currentSetId = sets[0]?.id ?? null;
+      }
+
+      if(currentSetId){
+        renderFilterBar(currentSetId);
+        renderSetTable(currentSetId);
+      }else{
+        $('#tables-container').innerHTML = '<div class="card">問題集がありません</div>';
+        $('#filter-chips').innerHTML = '';
+      }
+    };
 
     const renderSetTable = (setId) => {
       const set = state.sets.find(s=>s.id===setId);
@@ -432,9 +507,19 @@
     };
 
     const renderTableFor = (records, label) => {
-      // アイテム（問題番号 or 第n回）ごとにグループ → 日付昇順に並べ替え → 最大回数を列に
       const byItem = groupBy(records, r=>r.itemNumber);
-      const items = Object.keys(byItem).map(n=>Number(n)).sort((a,b)=>a-b);
+      let itemKeys = Object.keys(byItem);
+
+      // フィルタ（最終到達度）
+      if(filterLatest){
+        itemKeys = itemKeys.filter(k => {
+          const last = latestByGroup(byItem[k]);
+          return last.attain === filterLatest;
+        });
+      }
+
+      const items = itemKeys.map(n=>Number(n)).sort((a,b)=>a-b);
+
       // 各アイテム内で日付昇順、同日なら createdAt 昇順
       items.forEach(n => {
         byItem[n].sort((a,b) => {
@@ -445,7 +530,7 @@
       const maxCols = items.reduce((m,n)=>Math.max(m, byItem[n].length), 0);
 
       if(items.length===0){
-        return `<div class="hint">まだ記録がありません</div>`;
+        return `<div class="hint">該当する記録がありません</div>`;
       }
 
       let thead = `<thead><tr><th class="sticky">${label}</th>`;
@@ -508,7 +593,6 @@
       rec.durationSec = durationSec;
       rec.score = score;
       rec.attain = attain;
-      // 連番は “日付昇順” になるよう、表示側で都度並べ直す（保存データは回数を保持しない）
       save(state);
       renderAll();
       $('#dlg-detail').close();
@@ -531,13 +615,13 @@
       return d.toISOString().slice(0,10);
     };
     const renderReview = () => {
-      // 各アイテム（setId+subtype+itemNumber）で最終記録を拾う
+      // 各アイテムで最終記録を拾う
       const byKey = groupBy(state.records, r=>byItemKey(r));
       const latest = [];
       for(const k in byKey){
         const arr = byKey[k];
         arr.sort((a,b)=> {
-          const c = cmpISODate(a.dateISO,b.dateISO);
+          const c = cmpISODate(a.dateISO, b.dateISO);
           return c!==0 ? c : a.createdAt.localeCompare(b.createdAt);
         });
         latest.push(arr[arr.length-1]);
@@ -598,11 +682,10 @@
       todayEl.innerHTML = todayItems.length ? todayItems.map(mkRow).join('') : '<div class="muted">本日はありません</div>';
       weekEl.innerHTML = weekItems.length ? weekItems.map(mkRow).join('') : '<div class="muted">直近7日にはありません</div>';
 
-      // クイック追加（今日の日付・到達度は未選択）
+      // クイック追加
       document.querySelectorAll('[data-quick-add]').forEach(btn=>{
         btn.addEventListener('click', ()=>{
           const x = JSON.parse(btn.dataset.quickAdd);
-          // 記録タブに遷移し、対象をプリセット
           switchSection('sec-add');
           $('#add-subject').value = state.sets.find(s=>s.id===x.setId)?.subjectId;
           renderSetOptions();
@@ -736,10 +819,9 @@
         if(mode==='replace'){
           state = incoming;
         }else{
-          // マージ：subjects/sets/records を ID ベースで併合
           const mergeById = (cur, add) => {
             const map = new Map(cur.map(x=>[x.id,x]));
-            add.forEach(x=>map.set(x.id, x)); // 上書き
+            (add||[]).forEach(x=>map.set(x.id, x));
             return Array.from(map.values());
           };
           state.subjects = mergeById(state.subjects, incoming.subjects||[]);
@@ -794,3 +876,4 @@
   </script>
 </body>
 </html>
+``
