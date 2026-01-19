@@ -1,6 +1,6 @@
 
 {
-  "name": "計算進捗",
+  "name": "計算進捗（フラット）",
   "short_name": "進捗",
   "start_url": "./",
   "display": "standalone",
