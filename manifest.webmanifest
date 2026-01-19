@@ -1,0 +1,20 @@
+
+{
+  "name": "学習進捗トラッカー",
+  "short_name": "進捗トラッカー",
+  "description": "問題演習の進捗と復習予定を管理（Android Chrome 最適化）",
+  "lang": "ja",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b1416",
+  "theme_color": "#0f766e",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" }
+    /* 可能なら:
+    ,{ "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    */
+  ]
+}
+``
