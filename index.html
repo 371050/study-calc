@@ -99,6 +99,7 @@
     .row{display:flex; align-items:center; justify-content:space-between; gap:10px}
     .list{display:flex; flex-direction:column; gap:8px}
     .pill{display:inline-flex; padding:6px 10px; border:1px solid #14484e; background:#0b2f33; border-radius:999px; color:#bde6e6}
+    .pill.overdue{background:#2a0b0b; border-color:#7f1d1d; color:#fee2e2}
     .danger{color:#fecaca}
     .bottom-nav{
       position:fixed; bottom:0; left:0; right:0; background:#0d262a; border-top:1px solid #1a3a40;
@@ -361,18 +362,53 @@
 
     let state = load();
 
+    // ====== UI状態（直前の選択を維持）======
+    const UIKEY = 'study-tracker-ui-v1';
+    const defaultUI = () => ({
+      addSubjectId: null,
+      addSetId: null,
+      addSubtype: '個別',
+      addAttain: '○'
+    });
+    const loadUI = () => {
+      const raw = localStorage.getItem(UIKEY);
+      if(!raw) return defaultUI();
+      try{ return { ...defaultUI(), ...JSON.parse(raw) }; }catch{ return defaultUI(); }
+    };
+    const saveUI = () => { localStorage.setItem(UIKEY, JSON.stringify(ui)); };
+    let ui = loadUI();
+
     // ====== ビュー補助 ======
     const renderSubjectSelects = () => {
       const opts = state.subjects.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
       $('#add-subject').innerHTML = opts;
       $('#set-subject').innerHTML = opts;
+
+      // 直前の教科選択を復元
+      if(ui.addSubjectId && state.subjects.some(s=>s.id===ui.addSubjectId)) {
+        $('#add-subject').value = ui.addSubjectId;
+      }
+      // 管理画面側は add-subject に追従
+      $('#set-subject').value = $('#add-subject').value;
+
       renderSetOptions();
     };
     const renderSetOptions = () => {
       const sid = $('#add-subject').value;
       const list = state.sets.filter(s=>s.subjectId===sid);
       $('#add-set').innerHTML = list.map(s=>`<option value="${s.id}" data-kind="${s.kind}" data-has="${s.hasSubtypes?'1':'0'}">${s.name}</option>`).join('');
+
+      // 直前の問題集選択を復元（同一教科内にある場合のみ）
+      if(ui.addSetId && list.some(s=>s.id===ui.addSetId)) {
+        $('#add-set').value = ui.addSetId;
+      }
       onSetChanged();
+
+      // subtype/attain も復元
+      if($('#subtype-wrap').style.display !== 'none') {
+        $('#add-subtype').value = ui.addSubtype || '個別';
+      }
+      $('#add-attain').value = ui.addAttain || '○';
     };
     const onSetChanged = () => {
       const sel = $('#add-set');
@@ -414,7 +450,20 @@
       };
       state.records.push(rec);
       save(state);
+      // 直前選択を保存（次の記録でも維持）
+      ui.addSubjectId = subjectId;
+      ui.addSetId = setId;
+      if(subtype) ui.addSubtype = subtype;
+      ui.addAttain = attain;
+      saveUI();
+
       renderAll();
+      // 入力欄は必要最低限だけクリア（選択は維持）
+      $('#add-itemnum').value = '';
+      $('#add-duration').value = '';
+      $('#add-score').value = '';
+      $('#add-date').value = todayISO();
+      $('#add-itemnum').focus();
       alert('保存しました');
     });
 
@@ -679,23 +728,26 @@
           itemNumber: rec.itemNumber
         };
 
-        if(due===today) todayItems.push(row);
+        if(due<=today) todayItems.push(row);
         else if (due>today && due<=in7end) weekItems.push(row);
       }
 
-      todayItems.sort((a,b)=>a.label.localeCompare(b.label,'ja'));
+      todayItems.sort((a,b)=>a.due.localeCompare(b.due) || a.label.localeCompare(b.label,'ja'));
       weekItems.sort((a,b)=>a.due.localeCompare(b.due)||a.label.localeCompare(b.label,'ja'));
 
       const mkRow = (x) => {
-        return `<div class="row card">
-          <div>
-            <div><span class="pill">予定日 ${x.due}</span></div>
-            <div style="margin-top:6px">${x.label}</div>
-            <div class="tiny muted">直近の到達度：<b>${x.status}</b>｜最終学習日：${x.last}</div>
-          </div>
-          <div class="row-actions">
-            <button class="ghost" data-quick-add='${JSON.stringify(x)}'>記録する</button>
-          </div>
+        const overdue = x.due < today;
+        const days = overdue ? Math.floor((new Date(today+'T00:00:00') - new Date(x.due+'T00:00:00'))/86400000) : 0;
+        const pillText = overdue ? `${days}日前に期限 ${x.due}` : `予定日 ${x.due}`;
+        return `<div class="row card"> 
+        <div> 
+        <div><span class="pill ${overdue ? 'overdue' : ''}">${pillText}</span></div> 
+        <div style="margin-top:6px">${x.label}</div> 
+        <div class="tiny muted">直近の到達度：<b>${x.status}</b>｜最終学習日：${x.last}</div> 
+        </div> 
+        <div class="row-actions"> 
+        <button class="ghost" data-quick-add='${JSON.stringify(x)}'>記録する</button> 
+        </div> 
         </div>`;
       };
 
@@ -718,7 +770,13 @@
           $('#add-date').value = todayISO();
           $('#add-duration').value = '';
           $('#add-score').value = '';
-          $('#add-attain').value = '△';
+          $('#add-attain').value = ui.addAttain || '△';
+        // 選択の維持
+        ui.addSubjectId = $('#add-subject').value;
+        ui.addSetId = x.setId;
+        if(x.subtype){ ui.addSubtype = x.subtype; }
+        ui.addAttain = $('#add-attain').value;
+        saveUI();
         });
       });
     };
@@ -883,8 +941,22 @@
       renderManageLists();
       fillToday();
     };
-    $('#add-subject').addEventListener('change', renderSetOptions);
-    $('#add-set').addEventListener('change', onSetChanged);
+    $('#add-subject').addEventListener('change', () => {
+      ui.addSubjectId = $('#add-subject').value;
+      ui.addSetId = null; // 教科が変わったら候補が変わるため
+      saveUI();
+      $('#set-subject').value = ui.addSubjectId;
+      renderSetOptions();
+    });
+    $('#add-set').addEventListener('change', () => {
+      ui.addSetId = $('#add-set').value;
+      saveUI();
+      onSetChanged();
+    });
+
+    // 直前の選択を維持（subtype / attain）
+    $('#add-subtype').addEventListener('change', () => { ui.addSubtype = $('#add-subtype').value; saveUI(); });
+    $('#add-attain').addEventListener('change', () => { ui.addAttain = $('#add-attain').value; saveUI(); });
 
     // PWA: サービスワーカー登録
     if('serviceWorker' in navigator){
